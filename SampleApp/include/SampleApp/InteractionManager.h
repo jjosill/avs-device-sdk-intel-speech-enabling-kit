@@ -52,8 +52,8 @@ public:
         capabilityAgents::aip::AudioProvider wakeWordAudioProvider = capabilityAgents::aip::AudioProvider::null(),
         std::shared_ptr<esp::ESPDataProviderInterface> espProvider = nullptr,
         std::shared_ptr<esp::ESPDataModifierInterface> espModifier = nullptr,
-        std::shared_ptr<avsCommon::sdkInterfaces::CallManagerInterface> callManager = nullptr);
-		        bool const startPaStream = true);
+        std::shared_ptr<avsCommon::sdkInterfaces::CallManagerInterface> callManager = nullptr,
+		bool const startPaStream = true);
 
 
     /**
@@ -65,6 +65,11 @@ public:
      * Should be called when a user requests help.
      */
     void help();
+
+    /**
+     * Should be called when a user requests help and the application failed to connect to AVS.
+     */
+    void limitedHelp();
 
     /**
      * Toggles the microphone state if the Sample App was built with wakeword. When the microphone is turned off, the

@@ -50,10 +50,11 @@ public:
         std::shared_ptr<avsCommon::avs::AudioInputStream> stream,
         std::string keyword,
         avsCommon::avs::AudioInputStream::Index beginIndex = UNSPECIFIED_INDEX,
-        avsCommon::avs::AudioInputStream::Index endIndex = UNSPECIFIED_INDEX,
+        avsCommon::avs::AudioInputStream::Index endIndex = UNSPECIFIED_INDEX, 
         std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr) override;
     /// @}
 
+        ///$ std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr) override;
 private:
     /// The default SDK client.
     std::shared_ptr<defaultClient::DefaultClient> m_client;

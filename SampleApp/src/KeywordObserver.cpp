@@ -43,13 +43,13 @@ void KeywordObserver::onKeyWordDetected(
     } else if (
         endIndex != avsCommon::sdkInterfaces::KeyWordObserverInterface::UNSPECIFIED_INDEX &&
         beginIndex != avsCommon::sdkInterfaces::KeyWordObserverInterface::UNSPECIFIED_INDEX) {
-        auto espData = capabilityAgents::aip::ESPData::EMPTY_ESP_DATA;
-        if (m_espProvider) {
-            espData = m_espProvider->getESPData();
-        }
-
         if (m_client) {
-            m_client->notifyOfWakeWord(m_audioProvider, beginIndex, endIndex, keyword, espData, KWDMetadata);
+            if (m_espProvider) {
+                auto espData = m_espProvider->getESPData();
+                m_client->notifyOfWakeWord(m_audioProvider, beginIndex, endIndex, keyword, espData);
+            } else {
+                m_client->notifyOfWakeWord(m_audioProvider, beginIndex, endIndex, keyword);
+            }
         }
     }
 }

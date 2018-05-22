@@ -473,7 +473,8 @@ CBLAuthDelegate::FlowState CBLAuthDelegate::handleRequestingCodePair() {
             case AuthObserverInterface::Error::INVALID_REQUEST:
             case AuthObserverInterface::Error::INVALID_VALUE:
             case AuthObserverInterface::Error::UNSUPPORTED_GRANT_TYPE:
-            case AuthObserverInterface::Error::INTERNAL_ERROR: {
+            case AuthObserverInterface::Error::INTERNAL_ERROR:
+            case AuthObserverInterface::Error::INVALID_CBL_CLIENT_ID: {
                 setAuthState(AuthObserverInterface::State::UNRECOVERABLE_ERROR);
                 return FlowState::STOPPING;
             }
@@ -517,7 +518,8 @@ CBLAuthDelegate::FlowState CBLAuthDelegate::handleRequestingToken() {
             case AuthObserverInterface::Error::INVALID_REQUEST:
             case AuthObserverInterface::Error::INVALID_VALUE:
             case AuthObserverInterface::Error::UNSUPPORTED_GRANT_TYPE:
-            case AuthObserverInterface::Error::INTERNAL_ERROR: {
+            case AuthObserverInterface::Error::INTERNAL_ERROR:
+            case AuthObserverInterface::Error::INVALID_CBL_CLIENT_ID: {
                 setAuthState(AuthObserverInterface::State::UNRECOVERABLE_ERROR);
                 return FlowState::STOPPING;
             }
@@ -570,11 +572,16 @@ CBLAuthDelegate::FlowState CBLAuthDelegate::handleRefreshingToken() {
                 case AuthObserverInterface::Error::INVALID_CODE_PAIR:
                     clearRefreshToken();
                     return FlowState::REQUESTING_CODE_PAIR;
-                case AuthObserverInterface::Error::UNAUTHORIZED_CLIENT:
                 case AuthObserverInterface::Error::INVALID_REQUEST:
+                    //if (newRefreshToken) {
+                    setAuthError(AuthObserverInterface::Error::INVALID_CBL_CLIENT_ID);
+                    //}
+                // Falls through
+                case AuthObserverInterface::Error::UNAUTHORIZED_CLIENT:
                 case AuthObserverInterface::Error::INVALID_VALUE:
                 case AuthObserverInterface::Error::UNSUPPORTED_GRANT_TYPE:
-                case AuthObserverInterface::Error::INTERNAL_ERROR: {
+                case AuthObserverInterface::Error::INTERNAL_ERROR:
+                case AuthObserverInterface::Error::INVALID_CBL_CLIENT_ID: {
                     setAuthState(AuthObserverInterface::State::UNRECOVERABLE_ERROR);
                     return FlowState::STOPPING;
                 }

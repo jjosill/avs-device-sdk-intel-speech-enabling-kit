@@ -5,7 +5,6 @@
  */
 
 #include <AVSCommon/Utils/Logger/Logger.h>
-
 #include "SampleApp/PortAudioObserver.h"
 
 namespace alexaClientSDK {
@@ -36,7 +35,8 @@ void PortAudioObserver::onKeyWordDetected(
         std::shared_ptr<AudioInputStream> stream,
         std::string keyword,
         AudioInputStream::Index begin,
-        AudioInputStream::Index end)
+        AudioInputStream::Index end, 
+	std::shared_ptr<const std::vector<char>> KWDMetadata)
 {
     if(!m_micWrapper->isStreaming()) {
         ACSDK_DEBUG(LX("onKeyWordDetected")

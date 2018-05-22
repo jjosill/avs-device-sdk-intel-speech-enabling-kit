@@ -36,16 +36,18 @@
 #include <AVSCommon/SDKInterfaces/AuthDelegateInterface.h>
 #include <AVSCommon/SDKInterfaces/AudioPlayerObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/CallManagerInterface.h>
+#include <AVSCommon/SDKInterfaces/AuthDelegateInterface.h>
 #include <AVSCommon/SDKInterfaces/ConnectionStatusObserverInterface.h>
-#include <AVSCommon/SDKInterfaces/DCFDelegateInterface.h>
-#include <AVSCommon/SDKInterfaces/AudioInputProcessorObserverInterface.h>
-#include <AVSCommon/SDKInterfaces/DCFObserverInterface.h>
+#include <AVSCommon/SDKInterfaces/CapabilitiesDelegateInterface.h>
+#include <AVSCommon/SDKInterfaces/CapabilitiesObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/DialogUXStateObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/SingleSettingObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/TemplateRuntimeObserverInterface.h>
 #include <AVSCommon/Utils/LibcurlUtils/HTTPContentFetcherFactory.h>
 #include <AVSCommon/Utils/MediaPlayer/MediaPlayerInterface.h>
 #include <AVSCommon/Utils/Network/InternetConnectionMonitor.h>
+#include <AVSCommon/SDKInterfaces/AudioInputProcessorObserverInterface.h>
+
 #include <CertifiedSender/CertifiedSender.h>
 #include <CertifiedSender/SQLiteMessageStorage.h>
 #include <ExternalMediaPlayer/ExternalMediaPlayer.h>
@@ -70,7 +72,7 @@ namespace defaultClient {
  * This class serves to instantiate each default component with of the SDK with no specializations to provide an
  * "out-of-box" component that users may utilize for AVS interaction.
  */
-class DefaultClient : public avsCommon::sdkInterfaces::DCFObserverInterface {
+class DefaultClient : public avsCommon::sdkInterfaces::CapabilitiesObserverInterface {
 public:
     /// A reserved index value which is considered invalid.
     static const auto INVALID_INDEX = capabilityAgents::aip::AudioInputProcessor::INVALID_INDEX;
@@ -140,31 +142,31 @@ public:
             connectionObservers,
         std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> internetConnectionMonitor,
         bool isGuiSupported,
-        std::shared_ptr<avsCommon::sdkInterfaces::DCFDelegateInterface> dcfDelegate,
+        std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface> capabilitiesDelegate,
         avsCommon::sdkInterfaces::softwareInfo::FirmwareVersion firmwareVersion =
             avsCommon::sdkInterfaces::softwareInfo::INVALID_FIRMWARE_VERSION,
         bool sendSoftwareInfoOnConnected = false,
         std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver =
             nullptr);
 
-    /// @name DCFObserverInterface Methods
+    /// @name CapabilitiesObserverInterface Methods
     /// @{
-    void onDCFStateChange(
-        avsCommon::sdkInterfaces::DCFObserverInterface::State newState,
-        avsCommon::sdkInterfaces::DCFObserverInterface::Error error) override;
+    void onCapabilitiesStateChange(
+        avsCommon::sdkInterfaces::CapabilitiesObserverInterface::State newState,
+        avsCommon::sdkInterfaces::CapabilitiesObserverInterface::Error newError) override;
     /// }
 
     /**
      * Connects the client to AVS. After this call, users can observe the state of the connection asynchronously by
      * using a connectionObserver that was passed in to the create() function.
      *
-     * @param dcfDelegate The component that provides the client with the ability to send DCF (Device Capabilities
-     * Framework) messages.
+     * @param capabilitiesDelegate The component that provides the client with the ability to send messages to the
+     * Capabilities API.
      * @param avsEndpoint An optional parameter to the AVS URL to connect to. If empty the "endpoint" value of the
      * "acl" configuration will be used.  If there no such configuration value a default value will be used instead.
      */
     void connect(
-        const std::shared_ptr<avsCommon::sdkInterfaces::DCFDelegateInterface>& dcfDelegate,
+        const std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface>& capabilitiesDelegate,
         const std::string& avsEndpoint = "");
 
     /**
@@ -493,7 +495,8 @@ private:
      * changes.
      * @param connectionObservers Observers that can be used to be notified of connection status changes.
      * @param isGuiSupported Whether the device supports GUI.
-     * @param dcfDelegate The component that provides the client with the ability to send DCF messages.
+     * @param capabilitiesDelegate The component that provides the client with the ability to send messages to the
+     * Capabilities API.
      * @param firmwareVersion The firmware version to report to @c AVS or @c INVALID_FIRMWARE_VERSION.
      * @param sendSoftwareInfoOnConnected Whether to send SoftwareInfo upon connecting to @c AVS.
      * @param softwareInfoSenderObserver Object to receive notifications about sending SoftwareInfo.
@@ -527,7 +530,7 @@ private:
             connectionObservers,
         std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> internetConnectionMonitor,
         bool isGuiSupported,
-        std::shared_ptr<avsCommon::sdkInterfaces::DCFDelegateInterface> dcfDelegate,
+        std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface> capabilitiesDelegate,
         avsCommon::sdkInterfaces::softwareInfo::FirmwareVersion firmwareVersion,
         bool sendSoftwareInfoOnConnected,
         std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver);

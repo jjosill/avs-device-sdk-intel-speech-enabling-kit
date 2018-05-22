@@ -58,7 +58,7 @@ public:
         std::shared_ptr<avs::AudioInputStream> stream,
         std::string keyword,
         avs::AudioInputStream::Index beginIndex = UNSPECIFIED_INDEX,
-        avs::AudioInputStream::Index endIndex = UNSPECIFIED_INDEX,
+        avs::AudioInputStream::Index endIndex = UNSPECIFIED_INDEX ,
         std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr) = 0;
 };
 

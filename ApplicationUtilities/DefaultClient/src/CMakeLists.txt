@@ -21,6 +21,7 @@ target_link_libraries(DefaultClient
     AudioPlayer
     ExternalMediaPlayer
     AVSSystem
+    CertifiedSender
     ContextManager
     RegistrationManager)
 

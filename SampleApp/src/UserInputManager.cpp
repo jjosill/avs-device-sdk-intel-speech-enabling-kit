@@ -90,6 +90,7 @@ void UserInputManager::run() {
         std::cin >> x;
         x = ::tolower(x);
         if (x == QUIT) {
+            m_interactionManager->shutdown();
             return;
         } else if (x == INFO) {
             m_interactionManager->help();
@@ -264,6 +265,75 @@ void UserInputManager::run() {
             m_interactionManager->errorValue();
         }
     }
+}
+
+void UserInputManager::onAuthStateChange(AuthObserverInterface::State newState, AuthObserverInterface::Error newError) {
+    m_limitedInteraction = m_limitedInteraction || (newState == AuthObserverInterface::State::UNRECOVERABLE_ERROR);
+}
+
+void UserInputManager::onCapabilitiesStateChange(
+    CapabilitiesObserverInterface::State newState,
+    CapabilitiesObserverInterface::Error newError) {
+    m_limitedInteraction = m_limitedInteraction || (newState == CapabilitiesObserverInterface::State::FATAL_ERROR);
+}
+
+void UserInputManager::controlSpeaker() {
+    m_interactionManager->speakerControl();
+    char speakerChoice;
+    std::cin >> speakerChoice;
+    if (SPEAKER_TYPES.count(speakerChoice) == 0) {
+        m_interactionManager->errorValue();
+    } else {
+        m_interactionManager->volumeControl();
+        SpeakerInterface::Type speaker = SPEAKER_TYPES.at(speakerChoice);
+        char volume;
+        while (std::cin >> volume && volume != 'q') {
+            switch (volume) {
+                case '1':
+                    m_interactionManager->adjustVolume(speaker, INCREASE_VOLUME);
+                    break;
+                case '2':
+                    m_interactionManager->adjustVolume(speaker, DECREASE_VOLUME);
+                    break;
+                case '3':
+                    m_interactionManager->setMute(speaker, true);
+                    break;
+                case '4':
+                    m_interactionManager->setMute(speaker, false);
+                    break;
+                case 'i':
+                    m_interactionManager->volumeControl();
+                    break;
+                default:
+                    m_interactionManager->errorValue();
+                    break;
+            }
+        }
+    }
+}
+
+bool UserInputManager::confirmReset() {
+    m_interactionManager->confirmResetDevice();
+    char y;
+    do {
+        std::cin >> y;
+        // Check the Setting which has to be changed.
+        switch (y) {
+            case 'Y':
+            case 'y':
+                m_interactionManager->resetDevice();
+                return true;
+            case 'N':
+            case 'n':
+                return false;
+            default:
+                m_interactionManager->errorValue();
+                m_interactionManager->confirmResetDevice();
+                break;
+        }
+    } while (true);
+
+    return false;
 }
 
 }  // namespace sampleApp

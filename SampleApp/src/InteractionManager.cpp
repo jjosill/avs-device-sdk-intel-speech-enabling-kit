@@ -29,9 +29,10 @@ InteractionManager::InteractionManager(
     capabilityAgents::aip::AudioProvider wakeWordAudioProvider,
     std::shared_ptr<esp::ESPDataProviderInterface> espProvider,
     std::shared_ptr<esp::ESPDataModifierInterface> espModifier,
-    std::shared_ptr<avsCommon::sdkInterfaces::CallManagerInterface> callManager) :
-        bool startPaStream) :
-	    RequiresShutdown{"InteractionManager"},
+    std::shared_ptr<avsCommon::sdkInterfaces::CallManagerInterface> callManager,
+	bool startPaStream
+	) :
+        RequiresShutdown{"InteractionManager"},
         m_client{client},
         m_micWrapper{micWrapper},
         m_userInterface{userInterface},
@@ -44,11 +45,11 @@ InteractionManager::InteractionManager(
         m_isHoldOccurring{false},
         m_isTapOccurring{false},
         m_isMicOn{true}
-{ 
-    if(startPaStream) {
-        m_micWrapper->startStreamingMicrophoneData();
-    }
-}
+		{ 
+		   if(startPaStream) {
+        	m_micWrapper->startStreamingMicrophoneData();
+	    }
+	};
 
 void InteractionManager::begin() {
     m_executor.submit([this]() {
@@ -57,8 +58,13 @@ void InteractionManager::begin() {
     });
 }
 
+
 void InteractionManager::help() {
     m_executor.submit([this]() { m_userInterface->printHelpScreen(); });
+}
+
+void InteractionManager::limitedHelp() {
+    m_executor.submit([this]() { m_userInterface->printLimitedHelp(); });
 }
 
 void InteractionManager::settings() {

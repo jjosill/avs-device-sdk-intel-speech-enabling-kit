@@ -75,7 +75,7 @@ std::unique_ptr<DefaultClient> DefaultClient::create(
         connectionObservers,
     std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> internetConnectionMonitor,
     bool isGuiSupported,
-    std::shared_ptr<avsCommon::sdkInterfaces::DCFDelegateInterface> dcfDelegate,
+    std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface> capabilitiesDelegate,
     avsCommon::sdkInterfaces::softwareInfo::FirmwareVersion firmwareVersion,
     bool sendSoftwareInfoOnConnected,
     std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver) {
@@ -105,7 +105,7 @@ std::unique_ptr<DefaultClient> DefaultClient::create(
             connectionObservers,
             internetConnectionMonitor,
             isGuiSupported,
-            dcfDelegate,
+            capabilitiesDelegate,
             firmwareVersion,
             sendSoftwareInfoOnConnected,
             softwareInfoSenderObserver)) {
@@ -143,7 +143,7 @@ bool DefaultClient::initialize(
         connectionObservers,
     std::shared_ptr<avsCommon::utils::network::InternetConnectionMonitor> internetConnectionMonitor,
     bool isGuiSupported,
-    std::shared_ptr<avsCommon::sdkInterfaces::DCFDelegateInterface> dcfDelegate,
+    std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface> capabilitiesDelegate,
     avsCommon::sdkInterfaces::softwareInfo::FirmwareVersion firmwareVersion,
     bool sendSoftwareInfoOnConnected,
     std::shared_ptr<avsCommon::sdkInterfaces::SoftwareInfoSenderObserverInterface> softwareInfoSenderObserver) {
@@ -182,8 +182,8 @@ bool DefaultClient::initialize(
         return false;
     }
 
-    if (!dcfDelegate) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "nullDCFDelegate"));
+    if (!capabilitiesDelegate) {
+        ACSDK_ERROR(LX("initializeFailed").d("reason", "nullCapabilitiesDelegate"));
         return false;
     }
 
@@ -456,7 +456,7 @@ bool DefaultClient::initialize(
 #endif
 
     std::shared_ptr<capabilityAgents::settings::SettingsUpdatedEventSender> settingsUpdatedEventSender =
-        alexaClientSDK::capabilityAgents::settings::SettingsUpdatedEventSender::create(m_connectionManager);
+        alexaClientSDK::capabilityAgents::settings::SettingsUpdatedEventSender::create(m_certifiedSender);
     if (!settingsUpdatedEventSender) {
         ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToCreateSettingsObserver"));
         return false;
@@ -660,74 +660,88 @@ bool DefaultClient::initialize(
         }
     }
 
+
     /*
-     * Register capabilities for DCF publishing.
+     * Register capabilities for publishing to the Capabilities API.
      */
-    if (!(dcfDelegate->registerCapability(m_alertsCapabilityAgent))) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "Alerts"));
-        return false;
-    }
-
-    if (!(dcfDelegate->registerCapability(m_audioActivityTracker))) {
+    if (!(capabilitiesDelegate->registerCapability(m_alertsCapabilityAgent))) {
         ACSDK_ERROR(
-            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "AudioActivityTracker"));
+            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("capabilitiesDelegate", "Alerts"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(m_audioPlayer))) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "AudioPlayer"));
+    if (!(capabilitiesDelegate->registerCapability(m_audioActivityTracker))) {
+        ACSDK_ERROR(LX("initializeFailed")
+                        .d("reason", "unableToRegisterCapability")
+                        .d("capabilitiesDelegate", "AudioActivityTracker"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(m_notificationsCapabilityAgent))) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "Notifications"));
-        return false;
-    }
-
-    if (!(dcfDelegate->registerCapability(m_playbackController))) {
+    if (!(capabilitiesDelegate->registerCapability(m_audioPlayer))) {
         ACSDK_ERROR(
-            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "PlaybackController"));
+            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("capabilitiesDelegate", "AudioPlayer"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(m_settings))) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "Settings"));
+
+    if (!(capabilitiesDelegate->registerCapability(m_notificationsCapabilityAgent))) {
+        ACSDK_ERROR(LX("initializeFailed")
+                        .d("reason", "unableToRegisterCapability")
+                        .d("capabilitiesDelegate", "Notifications"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(m_speakerManager))) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "Speaker"));
+    if (!(capabilitiesDelegate->registerCapability(m_playbackController))) {
+        ACSDK_ERROR(LX("initializeFailed")
+                        .d("reason", "unableToRegisterCapability")
+                        .d("capabilitiesDelegate", "PlaybackController"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(m_audioInputProcessor))) {
+    if (!(capabilitiesDelegate->registerCapability(m_settings))) {
         ACSDK_ERROR(
-            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "SpeechRecognizer"));
+            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("capabilitiesDelegate", "Settings"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(m_speechSynthesizer))) {
+    if (!(capabilitiesDelegate->registerCapability(m_speakerManager))) {
         ACSDK_ERROR(
-            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "SpeechSynthesizer"));
+            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("capabilitiesDelegate", "Speaker"));
         return false;
     }
 
-    if (!(dcfDelegate->registerCapability(systemCapabilityProvider))) {
-        ACSDK_ERROR(LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "System"));
+    if (!(capabilitiesDelegate->registerCapability(m_audioInputProcessor))) {
+        ACSDK_ERROR(LX("initializeFailed")
+                        .d("reason", "unableToRegisterCapability")
+                        .d("capabilitiesDelegate", "SpeechRecognizer"));
+        return false;
+    }
+
+    if (!(capabilitiesDelegate->registerCapability(m_speechSynthesizer))) {
+        ACSDK_ERROR(LX("initializeFailed")
+                        .d("reason", "unableToRegisterCapability")
+                        .d("capabilitiesDelegate", "SpeechSynthesizer"));
+        return false;
+    }
+
+    if (!(capabilitiesDelegate->registerCapability(systemCapabilityProvider))) {
+        ACSDK_ERROR(
+            LX("initializeFailed").d("reason", "unableToRegisterCapability").d("capabilitiesDelegate", "System"));
         return false;
     }
 
     if (isGuiSupported) {
-        if (!(dcfDelegate->registerCapability(m_templateRuntime))) {
-            ACSDK_ERROR(
-                LX("initializeFailed").d("reason", "unableToRegisterCapability").d("dcfDelegate", "TemplateRuntime"));
+        if (!(capabilitiesDelegate->registerCapability(m_templateRuntime))) {
+            ACSDK_ERROR(LX("initializeFailed")
+                            .d("reason", "unableToRegisterCapability")
+                            .d("capabilitiesDelegate", "TemplateRuntime"));
             return false;
         }
 
-        if (!(dcfDelegate->registerCapability(m_visualActivityTracker))) {
+        if (!(capabilitiesDelegate->registerCapability(m_visualActivityTracker))) {
             ACSDK_ERROR(LX("initializeFailed")
                             .d("reason", "unableToRegisterCapability")
-                            .d("dcfDelegate", "VisualActivityTracker"));
+                            .d("capabilitiesDelegate", "VisualActivityTracker"));
             return false;
         }
     }
@@ -735,19 +749,21 @@ bool DefaultClient::initialize(
     return true;
 }
 
-void DefaultClient::onDCFStateChange(DCFObserverInterface::State newState, DCFObserverInterface::Error newError) {
-    if (DCFObserverInterface::State::SUCCESS == newState) {
+void DefaultClient::onCapabilitiesStateChange(
+    CapabilitiesObserverInterface::State newState,
+    CapabilitiesObserverInterface::Error newError) {
+    if (CapabilitiesObserverInterface::State::SUCCESS == newState) {
         m_connectionManager->enable();
     }
 }
 
 void DefaultClient::connect(
-    const std::shared_ptr<avsCommon::sdkInterfaces::DCFDelegateInterface>& dcfDelegate,
+    const std::shared_ptr<avsCommon::sdkInterfaces::CapabilitiesDelegateInterface>& capabilitiesDelegate,
     const std::string& avsEndpoint) {
     if (!avsEndpoint.empty()) {
         m_connectionManager->setAVSEndpoint(avsEndpoint);
     }
-    dcfDelegate->publishCapabilitiesAsyncWithRetries();
+    capabilitiesDelegate->publishCapabilitiesAsyncWithRetries();
 }
 
 void DefaultClient::disconnect() {
