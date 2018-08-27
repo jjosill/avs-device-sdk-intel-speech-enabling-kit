@@ -30,8 +30,7 @@ InteractionManager::InteractionManager(
     std::shared_ptr<esp::ESPDataProviderInterface> espProvider,
     std::shared_ptr<esp::ESPDataModifierInterface> espModifier,
     std::shared_ptr<avsCommon::sdkInterfaces::CallManagerInterface> callManager,
-	bool startPaStream
-	) :
+	bool startPaStream) :
         RequiresShutdown{"InteractionManager"},
         m_client{client},
         m_micWrapper{micWrapper},

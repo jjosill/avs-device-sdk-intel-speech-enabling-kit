@@ -343,8 +343,21 @@ parse_user_input 1 0 1
 #echo "Launching web browser. Do not close this terminal window."
 
 #sleep 2
+if [ ! -d "$HOME/Logs/" ] ; then
+    mkdir $HOME/Logs/
+fi
+
+suecard=$(aplay -l|grep s1000|awk -F ":" '{print $1}'|sed -e 's/card //')
+if [[ "$suecard" == "" ]]
+then
+	echo "Could not find SueCreek harware!!"
+	aplay -l
+	exit -1
+fi
+hw_name="hw:$suecard"
+
 cd $Origin/sdk-build/SampleApp/src
- ./SampleApp /home/aurora/avs/sdk-build/Integration/AlexaClientSDKConfig.json DEBUG9 $hw_name
+ ./SampleApp /home/aurora/avs/sdk-build/Integration/AlexaClientSDKConfig.json DEBUG9 $hw_name 2>$HOME/Logs/${ts}_stderr.log | tee $HOME/Logs/${ts}_stdout.log
 
 
 # Keep the terminal open until the AuthServer terminates on its own or this script ends

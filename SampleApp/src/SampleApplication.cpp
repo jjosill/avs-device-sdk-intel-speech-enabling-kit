@@ -23,20 +23,12 @@
 #include <KittAi/KittAiKeyWordDetector.h>
 #elif KWD_SENSORY
 #include <Sensory/SensoryKeywordDetector.h>
-
-
-#ifdef KWD
-#include <KWDProvider/KeywordDetectorProvider.h>
-#endif
-
-
 #elif KWD_HARDWARE
 #if defined(ALSA_HW_CTRL)
 #include <AlsaController/AlsaHardwareController.h>
 #endif
 #include <HardwareController/AbstractHardwareController.h>
 #include <Hardware/HardwareKeywordDetector.h>
-
 #endif
 
 #ifdef ENABLE_ESP
@@ -112,7 +104,6 @@ std::unordered_map<std::string, SampleApplication::SpeakerTypeAndCreateFunc>
 
 /// The singleton map from @c playerId to @c ExternalMediaAdapter creation functions.
 std::unordered_map<std::string, ExternalMediaPlayer::AdapterCreateFunction> SampleApplication::m_adapterToCreateFuncMap;
-
 
 #ifdef KWD_KITTAI
 /// The sensitivity of the Kitt.ai engine.
@@ -736,8 +727,11 @@ bool SampleApplication::initialize(
 #endif
 
 #endif
-
-
+#ifdef KWD_HARDWARE
+    bool startPaStream = false;
+#else
+    bool startPaStream = true;
+#endif
 
     // If wake word is enabled, then creating the interaction manager with a wake word audio provider.
     m_interactionManager = std::make_shared<alexaClientSDK::sampleApp::InteractionManager>(
@@ -748,12 +742,15 @@ bool SampleApplication::initialize(
         tapToTalkAudioProvider,
         wakeWordAudioProvider,
         espProvider,
-        espModifier);
+        espModifier,
+		nullptr,
+		startPaStream);
 
 #else
     // If wake word is not enabled, then creating the interaction manager without a wake word audio provider.
     m_interactionManager = std::make_shared<alexaClientSDK::sampleApp::InteractionManager>(
         client, micWrapper, userInterfaceManager, holdToTalkAudioProvider, tapToTalkAudioProvider);
+
 #endif
 
 #ifdef KWD_HARDWARE

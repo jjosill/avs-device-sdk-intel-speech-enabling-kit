@@ -36,7 +36,7 @@ void PortAudioObserver::onKeyWordDetected(
         std::string keyword,
         AudioInputStream::Index begin,
         AudioInputStream::Index end, 
-	std::shared_ptr<const std::vector<char>> KWDMetadata)
+		std::shared_ptr<const std::vector<char>> KWDMetadata)
 {
     if(!m_micWrapper->isStreaming()) {
         ACSDK_DEBUG(LX("onKeyWordDetected")

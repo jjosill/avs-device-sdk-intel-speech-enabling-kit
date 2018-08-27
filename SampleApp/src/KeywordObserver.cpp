@@ -49,12 +49,7 @@ void KeywordObserver::onKeyWordDetected(
         }
 
         if (m_client) {
-            if (m_espProvider) {
-                auto espData = m_espProvider->getESPData();
-                m_client->notifyOfWakeWord(m_audioProvider, beginIndex, endIndex, keyword, espData);
-            } else {
-                m_client->notifyOfWakeWord(m_audioProvider, beginIndex, endIndex, keyword);
-            }
+            m_client->notifyOfWakeWord(m_audioProvider, beginIndex, endIndex, keyword, espData, KWDMetadata);
         }
     }
 }

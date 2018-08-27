@@ -41,8 +41,20 @@ target_link_libraries(SampleApp
     "${SOCKETIO_LIB_PATH}"
     "${BOOST_LIB_PATH}")
 
-if(KWD)
-    target_link_libraries(SampleApp KeywordDetectorProvider)
+if(KITTAI_KEY_WORD_DETECTOR)
+    target_link_libraries(SampleApp 
+        KITTAI)
+endif()
+
+if(SENSORY_KEY_WORD_DETECTOR)
+    target_link_libraries(SampleApp SENSORY)
+endif()
+
+if(HARDWARE_KEY_WORD_DETECTOR)
+    target_link_libraries(SampleApp HARDWARE)
+    if(ALSA_HARDWARE_CONTROLLER)
+        target_link_libraries(SampleApp ALSA_HW_CONTROLLER)
+    endif()
 endif()
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
