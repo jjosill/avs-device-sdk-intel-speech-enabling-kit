@@ -47,6 +47,10 @@ static const std::string LIBCURL_TEST_AUTH_STRING = "test_auth_string";
 static const int TEST_EXCEPTION_STRING_LENGTH = 200;
 /// The number of iterations the multi-write test will perform.
 static const int TEST_EXCEPTION_PARTITIONS = 7;
+/// The maximum length of the exception message allowed.  Must be same as EXCEPTION_MESSAGE_MAX_SIZE.
+static const size_t TEST_EXCEPTION_STRING_MAX_SIZE = 4096;
+/// The length of the string we will test for the exception message that exceeded the maximum length.
+static const size_t TEST_EXCEPTION_STRING_EXCEED_MAX_LENGTH = TEST_EXCEPTION_STRING_MAX_SIZE + 1024;
 /// Number of bytes per word in the SDS circular buffer.
 static const size_t SDS_WORDSIZE = 1;
 /// Maximum number of readers to support in the SDS circular buffer.
@@ -55,6 +59,13 @@ static const size_t SDS_MAXREADERS = 1;
 static const size_t SDS_WORDS = 300;
 /// Number of strings to read/write for the test
 static const size_t NUMBER_OF_STRINGS = 1;
+
+/// The field name for the user voice attachment
+static const std::string AUDIO_ATTACHMENT_FIELD_NAME = "audio";
+
+/// The field name for the wake word engine metadata
+static const std::string KWD_METADATA_ATTACHMENT_FIELD_NAME = "WakwWordEngineMetadata";
+
 /**
  * Our GTest class.
  */
@@ -79,7 +90,7 @@ public:
     /// A Writer to write data to SDS buffer.
     std::unique_ptr<avsCommon::utils::sds::InProcessSDS::Writer> m_writer;
     /// The attachment reader for message request of @c m_readTestableStream
-    std::unique_ptr<InProcessAttachmentReader> m_attachmentReader;
+    std::shared_ptr<InProcessAttachmentReader> m_attachmentReader;
     /// A char pointer to data buffer to read or write from callbacks
     char* m_dataBegin;
     /// A string to which @c m_dataBegin is pointing to
@@ -87,7 +98,7 @@ public:
 };
 
 void HTTP2StreamTest::SetUp() {
-    AlexaClientSDKInit::initialize(std::vector<std::istream*>());
+    AlexaClientSDKInit::initialize(std::vector<std::shared_ptr<std::istream>>());
     m_testableConsumer = std::make_shared<TestableConsumer>();
 
     m_testString = createRandomAlphabetString(TEST_EXCEPTION_STRING_LENGTH);
@@ -105,7 +116,10 @@ void HTTP2StreamTest::SetUp() {
 
     /// Create an attachment Reader for @c m_MessageRequest
     m_attachmentReader = InProcessAttachmentReader::create(InProcessSDS::Reader::Policy::NONBLOCKING, stream);
-    m_MessageRequest = std::make_shared<MessageRequest>("", std::move(m_attachmentReader));
+    m_MessageRequest = std::make_shared<MessageRequest>("");
+    m_MessageRequest->addAttachmentReader(AUDIO_ATTACHMENT_FIELD_NAME, m_attachmentReader);
+    m_MessageRequest->addAttachmentReader(KWD_METADATA_ATTACHMENT_FIELD_NAME, m_attachmentReader);
+
     ASSERT_NE(m_MessageRequest, nullptr);
 
     m_mockMessageRequest = std::make_shared<MockMessageRequest>();
@@ -167,6 +181,23 @@ TEST_F(HTTP2StreamTest, testExceptionReceivedMultiWrite) {
     m_testableStream->notifyRequestObserver();
 }
 
+/**
+ * We will invoke the stream writeCallbacks directly to simulate exception data that exceeded maximum length allowed
+ * returning from AVS, and verify that the stream passes up the correct data up to the maximum length back to the
+ * request object.
+ */
+TEST_F(HTTP2StreamTest, testExceptionExceededMaximum) {
+    HTTP2Stream::writeCallback(
+        m_dataBegin, TEST_EXCEPTION_STRING_EXCEED_MAX_LENGTH, NUMBER_OF_STRINGS, m_testableStream.get());
+
+    EXPECT_CALL(*m_mockMessageRequest, exceptionReceived(_)).WillOnce(Invoke([](const std::string& exceptionMessage) {
+        EXPECT_EQ(exceptionMessage.size(), TEST_EXCEPTION_STRING_MAX_SIZE);
+    }));
+    EXPECT_CALL(*m_mockMessageRequest, sendCompleted(_)).Times(1);
+    // This simulates stream cleanup, which flushes out the parsed exception message.
+    m_testableStream->notifyRequestObserver();
+}
+
 TEST_F(HTTP2StreamTest, testHeaderCallback) {
     // Check if the length returned is as expected
     int headerLength = TEST_EXCEPTION_STRING_LENGTH * NUMBER_OF_STRINGS;
@@ -181,8 +212,9 @@ TEST_F(HTTP2StreamTest, testHeaderCallback) {
 
 TEST_F(HTTP2StreamTest, testReadCallBack) {
     // Check if the bytesRead are equal to length of data written in SDS buffer
-    int bytesRead = HTTP2Stream::readCallback(
-        m_dataBegin, TEST_EXCEPTION_STRING_LENGTH, NUMBER_OF_STRINGS, m_readTestableStream.get());
+    auto indexAndStream = std::make_pair<size_t, HTTP2Stream*>(0, m_readTestableStream.get());
+    int bytesRead =
+        HTTP2Stream::readCallback(m_dataBegin, TEST_EXCEPTION_STRING_LENGTH, NUMBER_OF_STRINGS, &indexAndStream);
     ASSERT_EQ(TEST_EXCEPTION_STRING_LENGTH, bytesRead);
     // Call the function with NULL HTTP2Stream and check if it fails
     bytesRead = HTTP2Stream::readCallback(m_dataBegin, TEST_EXCEPTION_STRING_LENGTH, NUMBER_OF_STRINGS, nullptr);

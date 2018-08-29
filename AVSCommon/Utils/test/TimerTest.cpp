@@ -27,7 +27,11 @@ namespace timing {
 namespace test {
 
 /// Specifies the expected timing accuracy (timestamps must be within +/- ACCURACY of expected values).
+#ifdef _WIN32
+static const auto ACCURACY = std::chrono::milliseconds(30);
+#else
 static const auto ACCURACY = std::chrono::milliseconds(15);
+#endif
 
 /// Used for cases where the task should return immediately, without delay.
 static const auto NO_DELAY = std::chrono::milliseconds(0);

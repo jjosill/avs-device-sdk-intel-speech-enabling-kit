@@ -57,7 +57,8 @@ public:
             std::shared_ptr<AudioInputStream> stream,
             std::string keyword,
             AudioInputStream::Index begin = KeyWordObserverInterface::UNSPECIFIED_INDEX,
-            AudioInputStream::Index end = KeyWordObserverInterface::UNSPECIFIED_INDEX) override;
+            AudioInputStream::Index end = KeyWordObserverInterface::UNSPECIFIED_INDEX,
+	    	std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr) override;
     /// @}
 
     /// @name DialogUXStateObserverInterface Functions

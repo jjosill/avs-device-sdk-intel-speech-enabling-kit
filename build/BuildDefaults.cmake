@@ -21,9 +21,6 @@ include(Logger)
 # Setup keyword requirement variables.
 include(KeywordDetector)
 
-# Setup playlist parser variables.
-include(PlaylistParser)
-
 # Setup media player variables.
 include(MediaPlayer)
 
@@ -33,11 +30,20 @@ include(PortAudio)
 # Setup Test Options variables.
 include(TestOptions)
 
+# Setup Bluetooth variables.
+include(Bluetooth)
+
 # Setup platform dependant variables.
 include (Platforms)
 
 # Setup ESP variables.
 include (ESP)
+
+# Setup Comms variables.
+include (Comms)
+
+# Setup MRM variables.
+include (MRM)
 
 if (HAS_EXTERNAL_MEDIA_PLAYER_ADAPTERS)
     include (ExternalMediaPlayerAdapters)

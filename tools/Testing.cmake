@@ -21,19 +21,11 @@ macro(discover_unit_tests includes libraries)
             get_filename_component(testname ${testsourcefile} NAME_WE)
             add_executable(${testname} ${testsourcefile})
             target_include_directories(${testname} PRIVATE ${includes})
-            target_link_libraries(${testname} ${libraries} gtest_main gmock_main)
+            # Do not include gtest_main due to double free issue
+            # - https://github.com/google/googletest/issues/930
+            target_link_libraries(${testname} ${libraries} gmock_main)
             GTEST_ADD_TESTS(${testname} "${inputs}" ${testsourcefile})
             add_dependencies(unit ${testname})
         endforeach ()
-    endif()
-endmacro()
-
-option(ACSDK_EXCLUDE_TEST_FROM_ALL "Exclude unit test from all." OFF)
-
-macro(acsdk_add_test_subdirectory_if_allowed)
-    if (ACSDK_EXCLUDE_TEST_FROM_ALL)
-        add_subdirectory("test" EXCLUDE_FROM_ALL)
-    else()
-        add_subdirectory("test")
     endif()
 endmacro()

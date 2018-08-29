@@ -55,7 +55,7 @@ using namespace ::testing;
 static std::chrono::milliseconds WAIT_TIMEOUT(1000);
 
 /// Time to simulate a notification rendering.
-static std::chrono::milliseconds RENDER_TIME(900);
+static std::chrono::milliseconds RENDER_TIME(10);
 
 /// Notifications namespace
 static const std::string NAMESPACE_NOTIFICATIONS("Notifications");
@@ -571,8 +571,8 @@ void NotificationsCapabilityAgentTest::initializeCapabilityAgent() {
 }
 
 void NotificationsCapabilityAgentTest::SetUp() {
-    std::istringstream inString(NOTIFICATIONS_CONFIG_JSON);
-    ASSERT_TRUE(AlexaClientSDKInit::initialize({&inString}));
+    auto inString = std::shared_ptr<std::istringstream>(new std::istringstream(NOTIFICATIONS_CONFIG_JSON));
+    ASSERT_TRUE(AlexaClientSDKInit::initialize({inString}));
 
     m_notificationsStorage = std::make_shared<TestNotificationsStorage>();
     m_renderer = MockNotificationRenderer::create();
@@ -786,8 +786,6 @@ TEST_F(NotificationsCapabilityAgentTest, testSameAssetId) {
     // send a second SetIndicator with the same assetId but persistVisualIndicator set to false.
     sendSetIndicatorDirective(generatePayload(false, true, ASSET_ID1), MESSAGE_ID_TEST2);
 
-    ASSERT_TRUE(m_renderer->waitUntilRenderingFinished());
-
     // the IndicatorState should not have changed since the second directive should have been ignored.
     ASSERT_TRUE(m_testNotificationsObserver->waitFor(IndicatorState::ON, WAIT_TIMEOUT));
 }
@@ -897,7 +895,6 @@ TEST_F(NotificationsCapabilityAgentTest, testClearData) {
     initializeCapabilityAgent();
     sendSetIndicatorDirective(generatePayload(true, true, "assetId1"), "firstIndicatorMessageId");
     ASSERT_TRUE(m_renderer->waitUntilRenderingStarted());
-    ASSERT_TRUE(m_renderer->waitUntilRenderingFinished());
 
     // Check that indicator is ON
     IndicatorState state = IndicatorState::UNDEFINED;
@@ -920,3 +917,13 @@ TEST_F(NotificationsCapabilityAgentTest, testClearData) {
 }  // namespace notifications
 }  // namespace capabilityAgents
 }  // namespace alexaClientSDK
+
+int main(int argc, char** argv) {
+    ::testing::InitGoogleTest(&argc, argv);
+
+// ACSDK-1367 - Some tests fail on Windows
+#if defined(_WIN32) && !defined(RESOLVED_ACSDK_1367)
+    ::testing::GTEST_FLAG(filter) = "-NotificationsCapabilityAgentTest.testSameAssetId";
+#endif
+    return RUN_ALL_TESTS();
+}

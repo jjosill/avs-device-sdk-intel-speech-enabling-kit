@@ -18,6 +18,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "ConsolePrinter.h"
 #include "UserInputManager.h"
@@ -25,6 +26,7 @@
 #ifdef KWD
 #include <KWD/AbstractKeywordDetector.h>
 #endif
+#include <CapabilitiesDelegate/CapabilitiesDelegate.h>
 #include <ExternalMediaPlayer/ExternalMediaPlayer.h>
 #include <MediaPlayer/MediaPlayer.h>
 
@@ -37,14 +39,14 @@ public:
     /**
      * Create a SampleApplication.
      *
-     * @param pathToConfig The path to the SDK configuration file.
+     * @param configFiles The vector of configuration files.
      * @param pathToInputFolder The path to the inputs folder containing data files needed by this application.
      * @param logLevel The level of logging to enable.  If this parameter is an empty string, the SDK's default
      *     logging level will be used.
      * @return A new @c SampleApplication, or @c nullptr if the operation failed.
      */
     static std::unique_ptr<SampleApplication> create(
-        const std::string& pathToConfig,
+        const std::vector<std::string>& configFiles,
         const std::string& pathToInputFolder,
         const std::string& logLevel = "",
         const std::string& hwName = "hw:0");
@@ -120,21 +122,31 @@ private:
     /**
      * Initialize a SampleApplication.
      *
-     * @param pathToConfig The path to the SDK configuration file.
+     * @param configFiles The vector of configuration files.
      * @param pathToInputFolder The path to the inputs folder containing data files needed by this application.
      * @param logLevel The level of logging to enable.  If this parameter is an empty string, the SDK's default
      *     logging level will be used.
      * @return @c true if initialization succeeded, else @c false.
      */
-    bool initialize(const std::string& pathToConfig, const std::string& pathToInputFolder,
-                    const std::string& logLevel, const std::string& hwName);
+    bool initialize(
+        const std::vector<std::string>& configFiles,
+        const std::string& pathToInputFolder,
+        const std::string& logLevel,
+		const std::string& hwName);
+
+    /// The @c InteractionManager which perform user requests.
+    std::shared_ptr<InteractionManager> m_interactionManager;
 
     /// The @c UserInputManager which controls the client.
-    std::unique_ptr<UserInputManager> m_userInputManager;
+    std::shared_ptr<UserInputManager> m_userInputManager;
 
     /// The map of the adapters and their mediaPlayers.
     std::unordered_map<std::string, std::shared_ptr<avsCommon::utils::mediaPlayer::MediaPlayerInterface>>
         m_externalMusicProviderMediaPlayersMap;
+
+    /// The map of the adapters and their mediaPlayers.
+    std::unordered_map<std::string, std::shared_ptr<avsCommon::sdkInterfaces::SpeakerInterface>>
+        m_externalMusicProviderSpeakersMap;
 
     /// The vector of mediaPlayers for the adapters.
     std::vector<std::shared_ptr<mediaPlayer::MediaPlayer>> m_adapterMediaPlayers;
@@ -150,6 +162,15 @@ private:
 
     /// The @c MediaPlayer used by @c NotificationsCapabilityAgent.
     std::shared_ptr<mediaPlayer::MediaPlayer> m_notificationsMediaPlayer;
+
+    /// The @c MediaPlayer used by @c Bluetooth.
+    std::shared_ptr<mediaPlayer::MediaPlayer> m_bluetoothMediaPlayer;
+
+    /// The @c CapabilitiesDelegate used by the client.
+    std::shared_ptr<alexaClientSDK::capabilitiesDelegate::CapabilitiesDelegate> m_capabilitiesDelegate;
+
+    /// The @c MediaPlayer used by @c NotificationsCapabilityAgent.
+    std::shared_ptr<mediaPlayer::MediaPlayer> m_ringtoneMediaPlayer;
 
     using SpeakerTypeAndCreateFunc =
         std::pair<avsCommon::sdkInterfaces::SpeakerInterface::Type, MediaPlayerCreateFunction>;

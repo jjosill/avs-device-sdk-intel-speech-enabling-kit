@@ -25,7 +25,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <AVSCommon/AVS/Initialization/AlexaClientSDKInit.h>
 #include <AVSCommon/AVS/SpeakerConstants/SpeakerConstants.h>
+#include <AVSCommon/Utils/Configuration/ConfigurationNode.h>
 #include <AVSCommon/Utils/Logger/Logger.h>
 #include <AVSCommon/Utils/Memory/Memory.h>
 #include <PlaylistParser/PlaylistParser.h>
@@ -37,6 +39,7 @@ namespace alexaClientSDK {
 namespace mediaPlayer {
 namespace test {
 
+using namespace avsCommon::avs;
 using namespace avsCommon::avs::attachment;
 using namespace avsCommon::avs::speakerConstants;
 using namespace avsCommon::sdkInterfaces;
@@ -77,12 +80,16 @@ static const std::chrono::milliseconds MP3_FILE_LENGTH(2688);
 /// Offset to start playback at.
 static const std::chrono::milliseconds OFFSET(2000);
 
-#ifdef RESOLVED_ACSDK_627
+#ifdef _WIN32
+static const std::string MEDIA_PLAYER_CONFIG = R"({
+"gstreamerMediaPlayer":{
+        "audioSink":"directsoundsink"
+    }
+})";
+#endif
 
 /// Tolerance when setting expectations.
-static const std::chrono::milliseconds TOLERANCE(200);
-
-#endif
+static const std::chrono::milliseconds TOLERANCE(500);
 
 /// Padding to add to offsets when necessary.
 static const std::chrono::milliseconds PADDING(10);
@@ -286,7 +293,7 @@ size_t MockAttachmentReader::receiveBytes(char* buf, std::size_t size) {
     while (pos < end) {
         if (!m_stream || m_stream->eof()) {
             if (m_iterationsLeft-- > 0) {
-                m_stream = make_unique<std::ifstream>(inputsDirPath + MP3_FILE_PATH);
+                m_stream = make_unique<std::ifstream>(inputsDirPath + MP3_FILE_PATH, std::ifstream::binary);
                 EXPECT_TRUE(m_stream);
                 EXPECT_TRUE(m_stream->good());
             } else {
@@ -617,6 +624,12 @@ public:
 };
 
 void MediaPlayerTest::SetUp() {
+// ACSDK-1373 - MediaPlayerTest fail on Windows
+// with GStreamer 1.14 default audio sink.
+#ifdef _WIN32
+    auto inString = std::shared_ptr<std::istringstream>(new std::istringstream(MEDIA_PLAYER_CONFIG));
+    initialization::AlexaClientSDKInit::initialize({inString});
+#endif
     m_playerObserver = std::make_shared<MockPlayerObserver>();
     m_mediaPlayer = MediaPlayer::create(std::make_shared<MockContentFetcherFactory>());
     ASSERT_TRUE(m_mediaPlayer);
@@ -636,7 +649,8 @@ void MediaPlayerTest::setAttachmentReaderSource(
 }
 
 void MediaPlayerTest::setIStreamSource(MediaPlayer::SourceId* id, bool repeat) {
-    auto returnId = m_mediaPlayer->setSource(make_unique<std::ifstream>(inputsDirPath + MP3_FILE_PATH), repeat);
+    auto returnId = m_mediaPlayer->setSource(
+        make_unique<std::ifstream>(inputsDirPath + MP3_FILE_PATH, std::ifstream::binary), repeat);
     ASSERT_NE(ERROR_SOURCE_ID, returnId);
     if (id) {
         *id = returnId;
@@ -988,8 +1002,6 @@ TEST_F(MediaPlayerTest, testStartPlayWithUrlPlaylistWaitForEnd) {
     ASSERT_EQ(m_playerObserver->getOnPlaybackFinishedCallCount(), 1);
 }
 
-// TODO: ACSDK-627 This test fails frequently on Ubuntu Linux platforms.
-#ifdef RESOLVED_ACSDK_627
 /**
  * Test setting the offset to a seekable source. Setting the offset should succeed and playback should start from the
  * offset.
@@ -998,23 +1010,21 @@ TEST_F(MediaPlayerTest, testSetOffsetSeekableSource) {
     std::chrono::milliseconds offset(OFFSET);
 
     std::string url_single(FILE_PREFIX + inputsDirPath + MP3_FILE_PATH);
-    auto sourceId = m_mediaPlayer->setSource(url_single);
+    auto sourceId = m_mediaPlayer->setSource(url_single, offset);
     ASSERT_NE(ERROR_SOURCE_ID, sourceId);
-    ASSERT_TRUE(m_mediaPlayer->setOffset(sourceId, offset));
     ASSERT_TRUE(m_mediaPlayer->play(sourceId));
     ASSERT_TRUE(m_playerObserver->waitForPlaybackStarted(sourceId));
     auto start = std::chrono::steady_clock::now();
     ASSERT_TRUE(m_playerObserver->waitForPlaybackFinished(sourceId));
-    ACSDK_INFO(LX("MediaPlayerTest").d("timeElapsed", timeElapsed.count()));
-    // Time elapsed should be total file length minus the offset.
-    ASSERT_TRUE(timeElapsed < (MP3_FILE_LENGTH - offset + TOLERANCE));
     ASSERT_EQ(m_playerObserver->getOnPlaybackStartedCallCount(), 1);
     ASSERT_EQ(m_playerObserver->getOnPlaybackFinishedCallCount(), 1);
 
     std::chrono::milliseconds timeElapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    ACSDK_INFO(LX("MediaPlayerTest").d("timeElapsed", timeElapsed.count()));
+    // Time elapsed should be total file length minus the offset.
+    ASSERT_TRUE(timeElapsed < (MP3_FILE_LENGTH - offset + TOLERANCE));
 }
-#endif
 
 // TODO: ACSDK-1024 MediaPlayerTest.testSetOffsetOutsideBounds is flaky
 /**
@@ -1393,7 +1403,8 @@ int main(int argc, char** argv) {
                  alexaClientSDK::mediaPlayer::test::MP3_FILE_PATH,
              "audio/mpeg"});
         std::ifstream fileStream(
-            alexaClientSDK::mediaPlayer::test::inputsDirPath + alexaClientSDK::mediaPlayer::test::MP3_FILE_PATH);
+            alexaClientSDK::mediaPlayer::test::inputsDirPath + alexaClientSDK::mediaPlayer::test::MP3_FILE_PATH,
+            std::ifstream::binary);
         std::stringstream fileData;
         fileData << fileStream.rdbuf();
         alexaClientSDK::mediaPlayer::test::urlsToContent.insert({alexaClientSDK::mediaPlayer::test::FILE_PREFIX +
@@ -1415,10 +1426,7 @@ int main(int argc, char** argv) {
         alexaClientSDK::mediaPlayer::test::urlsToContent.insert(
             {alexaClientSDK::mediaPlayer::test::TEST_M3U_PLAYLIST_URL,
              alexaClientSDK::mediaPlayer::test::TEST_M3U_PLAYLIST_CONTENT});
-// ACSDK-1141 - Some tests fail on Windows.
-#if defined(_WIN32) && !defined(RESOLVED_ACSDK_1141)
-        ::testing::GTEST_FLAG(filter) = "-MediaPlayerTest*";
-#endif
+
         return RUN_ALL_TESTS();
     }
 }

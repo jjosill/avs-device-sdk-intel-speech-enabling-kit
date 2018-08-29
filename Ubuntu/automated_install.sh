@@ -12,9 +12,6 @@ SDK_CONFIG_PRODUCT_ID=
 # SDK_CONFIG_CLIENT_ID=YOUR_CLIENT_ID_HERE
 SDK_CONFIG_CLIENT_ID=
 
-# Retrieve your client secret from the web settings tab within the developer console: https://developer.amazon.com/iba-sp/overview.html
-# SDK_CONFIG_CLIENT_SECRET=YOUR_CLIENT_SECRET_HERE
-SDK_CONFIG_CLIENT_SECRET=
 
 #-------------------------------------------------------
 # No need to change anything below this...
@@ -36,13 +33,9 @@ Organization='AVS_USER'
 SDK_CONFIG_DEVICE_SERIAL_NUMBER='123456789'
 # Your KeyStorePassword. We recommend leaving this blank for testing.
 KeyStorePassword=''
-# Audio file locations. These should match their locations on the system.
-SDK_SQLITE_DATABASE_FILE_PATH=''
-SDK_ALARM_DEFAULT_SOUND_FILE_PATH=$(pwd)'/application-necessities/sound-files/med_system_alerts_melodic_01._TTH_.mp3'
-SDK_ALARM_SHORT_SOUND_FILE_PATH=$(pwd)'/application-necessities/sound-files/med_system_alerts_melodic_01_short._TTH_.wav'
-SDK_TIMER_DEFAULT_SOUND_FILE_PATH=$(pwd)'/application-necessities/sound-files/med_system_alerts_melodic_02._TTH_.mp3'
-SDK_TIMER_SHORT_SOUND_FILE_PATH=$(pwd)'/application-necessities/sound-files/med_system_alerts_melodic_02_short._TTH_.wav'
 # Default database location settings.
+SDK_CBL_AUTH_DELEGATE_DATABASE_FILE_PATH=$(pwd)'/application-necessities/cblAuthDelegate.db'
+SDK_MISC_DATABASE_FILE_PATH=$(pwd)'/application-necessities/miscDatabase.db'
 SDK_SQLITE_DATABASE_FILE_PATH=$(pwd)'/application-necessities/alerts.db'
 SDK_SQLITE_SETTINGS_DATABASE_FILE_PATH=$(pwd)'/application-necessities/settings.db'
 SDK_CERTIFIED_SENDER_DATABASE_FILE_PATH=$(pwd)'/application-necessities/certifiedSender.db'
@@ -160,7 +153,7 @@ check_credentials()
   echo "======AVS User Credentials======"
   echo ""
   echo ""
-  if [ "${#SDK_CONFIG_PRODUCT_ID}" -eq 0 ] || [ "${#SDK_CONFIG_CLIENT_ID}" -eq 0 ] || [ "${#SDK_CONFIG_CLIENT_SECRET}" -eq 0 ]; then
+  if [ "${#SDK_CONFIG_PRODUCT_ID}" -eq 0 ] || [ "${#SDK_CONFIG_CLIENT_ID}" -eq 0 ]; then
     echo "At least one of the needed credentials (Product ID, Client ID, or Client Secret) is missing."
     echo ""
     echo ""
@@ -171,10 +164,9 @@ check_credentials()
   fi
 
   # Print out of variables and validate user inputs
-  if [ "${#SDK_CONFIG_PRODUCT_ID}" -ge 1 ] && [ "${#SDK_CONFIG_CLIENT_ID}" -ge 15 ] && [ "${#SDK_CONFIG_CLIENT_SECRET}" -ge 15 ]; then
+  if [ "${#SDK_CONFIG_PRODUCT_ID}" -ge 1 ] && [ "${#SDK_CONFIG_CLIENT_ID}" -ge 15 ]; then
     echo "Product ID >> $SDK_CONFIG_PRODUCT_ID"
     echo "Client ID >> $SDK_CONFIG_CLIENT_ID"
-    echo "Client Secret >> $SDK_CONFIG_CLIENT_SECRET"
     echo ""
     echo ""
     echo "Is this information correct?"
@@ -247,36 +239,6 @@ check_credentials()
   echo "Client ID is set to >> $SDK_CONFIG_CLIENT_ID"
   echo "-------------------------------"
 
-  # Check SDK_CONFIG_CLIENT_SECRET
-  NeedUpdate=0
-  echo ""
-  if [ "${#SDK_CONFIG_CLIENT_SECRET}" -eq 0 ]; then
-    echo "Your ClientSecret is not set"
-    NeedUpdate=1
-  else
-    echo "Your ClientSecret is set to: $SDK_CONFIG_CLIENT_SECRET."
-    echo "Is this information correct?"
-    echo ""
-    parse_user_input 1 1 0
-    USER_RESPONSE=$?
-    if [ "$USER_RESPONSE" = "$NO_ANSWER" ]; then
-      NeedUpdate=1
-    fi
-  fi
-  if [ $NeedUpdate -eq 1 ]; then
-    echo ""
-    echo "Please enter your Client Secret."
-    echo "This value should match the information at https://developer.amazon.com/iba-sp/overview.html."
-    echo "The information is located under the 'Security Profile' tab."
-    echo "E.g.: fxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxa"
-    get_credential 20
-    SDK_CONFIG_CLIENT_SECRET=$Credential
-  fi
-
-  echo "-------------------------------"
-  echo "Client Secret is set to >> $SDK_CONFIG_CLIENT_SECRET"
-  echo "-------------------------------"
-
   check_credentials
 }
 
@@ -311,9 +273,6 @@ if [ "$SDK_CONFIG_PRODUCT_ID" = "YOUR_PRODUCT_ID_HERE" ]; then
 fi
 if [ "$SDK_CONFIG_CLIENT_ID" = "YOUR_CLIENT_ID_HERE" ]; then
   SDK_CONFIG_CLIENT_ID=""
-fi
-if [ "$SDK_CONFIG_CLIENT_SECRET" = "YOUR_CLIENT_SECRET_HERE" ]; then
-  SDK_CONFIG_CLIENT_SECRET=""
 fi
 
 check_credentials
@@ -375,18 +334,35 @@ echo "Continue and launch a web browser?"
 parse_user_input 1 0 1
 
 # Run the Authorization Server
-echo -n "Web server starting...."
-python $Origin/sdk-build/AuthServer/AuthServer.py &
-pid=$!
+#echo -n "Web server starting...."
+#python $Origin/sdk-build/AuthServer/AuthServer.py &
+#pid=$!
 
-sleep 2
 # Launch a web browser to prompt for sign-in
-python -mwebbrowser http://localhost:3000
-echo "Launching web browser. Do not close this terminal window."
+#firefox -new-tab https://amazon.com/us/code
+#echo "Launching web browser. Do not close this terminal window."
+
+#sleep 2
+if [ ! -d "$HOME/Logs/" ] ; then
+    mkdir $HOME/Logs/
+fi
+
+suecard=$(aplay -l|grep s1000|awk -F ":" '{print $1}'|sed -e 's/card //')
+if [[ "$suecard" == "" ]]
+then
+	echo "Could not find SueCreek harware!!"
+	aplay -l
+	exit -1
+fi
+hw_name="hw:$suecard"
+
+cd $Origin/sdk-build/SampleApp/src
+ ./SampleApp /home/aurora/avs/sdk-build/Integration/AlexaClientSDKConfig.json DEBUG9 $hw_name 2>$HOME/Logs/${ts}_stderr.log | tee $HOME/Logs/${ts}_stdout.log
+
 
 # Keep the terminal open until the AuthServer terminates on its own or this script ends
-trap "kill $pid 2> /dev/null" EXIT
-while kill -0 $pid 2> /dev/null; do
-	sleep 2
-done
-trap - EXIT
+#trap "kill $pid 2> /dev/null" EXIT
+#while kill -0 $pid 2> /dev/null; do
+#	sleep 2
+#done
+#trap - EXIT

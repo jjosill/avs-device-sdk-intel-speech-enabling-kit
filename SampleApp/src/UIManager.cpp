@@ -13,6 +13,7 @@
  * permissions and limitations under the License.
  */
 
+#include <iostream>
 #include <sstream>
 #include <iostream>
 #include <fstream>
@@ -79,6 +80,10 @@ static const std::string HELP_MESSAGE =
     "|       Press '2' for a 'PAUSE' button press.                                |\n"
     "|       Press '3' for a 'NEXT' button press.                                 |\n"
     "|       Press '4' for a 'PREVIOUS' button press.                             |\n"
+#ifdef ENABLE_COMMS
+    "| Comms Controls:                                                            |\n"
+    "|       Press 'd' followed by Enter at any time to accept or stop calls.     |\n"
+#endif
     "| Settings:                                                                  |\n"
     "|       Press 'c' followed by Enter at any time to see the settings screen.  |\n"
     "| Speaker Control:                                                           |\n"
@@ -91,8 +96,40 @@ static const std::string HELP_MESSAGE =
     "| Reset device:                                                              |\n"
     "|       Press 'k' followed by Enter at any time to reset your device. This   |\n"
     "|       will erase any data stored in the device and you will have to        |\n"
-    "|       register your device with another account.                           |\n"
-    "|       This will kill the application since we don't support login yet.     |\n"
+    "|       re-register your device.                                             |\n"
+    "|       This option will also exit the application.                          |\n"
+    "| Quit:                                                                      |\n"
+    "|       Press 'q' followed by Enter at any time to quit the application.     |\n"
+    "+----------------------------------------------------------------------------+\n";
+
+static const std::string LIMITED_HELP_HEADER =
+    "+----------------------------------------------------------------------------+\n"
+    "|                          In Limited Mode:                                  |\n"
+    "+----------------------------------------------------------------------------+\n";
+
+static const std::string AUTH_FAILED_STR =
+    "| Status : Unrecoverable authorization failure.                              |\n";
+
+static const std::string CAPABILITIES_API_FAILED_STR =
+    "| Status : Unrecoverable Capabilities API call failure.                      |\n";
+
+static const std::string LIMITED_HELP_MESSAGE =
+    "+----------------------------------------------------------------------------+\n"
+    "| Info:                                                                      |\n"
+    "|       Press 'i' followed by Enter at any time to see the help screen.      |\n"
+    "| Stop an interaction:                                                       |\n"
+    "|       Press 's' and Enter to stop an ongoing interaction.                  |\n"
+#ifdef KWD
+    "| Privacy mode (microphone off):                                             |\n"
+    "|       Press 'm' and Enter to turn on and off the microphone.               |\n"
+#endif
+    "| Speaker Control:                                                           |\n"
+    "|       Press 'p' followed by Enter at any time to adjust speaker settings.  |\n"
+    "| Reset device:                                                              |\n"
+    "|       Press 'k' followed by Enter at any time to reset your device. This   |\n"
+    "|       will erase any data stored in the device and you will have to        |\n"
+    "|       re-register your device.                                             |\n"
+    "|       This option will also exit the application.                          |\n"
     "| Quit:                                                                      |\n"
     "|       Press 'q' followed by Enter at any time to quit the application.     |\n"
     "+----------------------------------------------------------------------------+\n";
@@ -115,16 +152,19 @@ static const std::string LOCALE_MESSAGE =
     "| Press '5' followed by Enter to change the language to Canadian English.    |\n"
     "| Press '6' followed by Enter to change the language to Japanese.            |\n"
     "| Press '7' followed by Enter to change the language to Australian English.  |\n"
+    "| Press '8' followed by Enter to change the language to French.              |\n"
     "+----------------------------------------------------------------------------+\n";
 
 static const std::string SPEAKER_CONTROL_MESSAGE =
     "+----------------------------------------------------------------------------+\n"
     "|                          Speaker Options:                                  |\n"
     "|                                                                            |\n"
-    "| Press '1' followed by Enter to modify AVS_SYNCED typed speakers.           |\n"
-    "|       AVS_SYNCED Speakers Control Volume For: Speech, Content.             |\n"
-    "| Press '2' followed by Enter to modify LOCAL typed speakers.                |\n"
-    "|       LOCAL Speakers Control Volume For: Alerts.                           |\n"
+    "| Press '1' followed by Enter to modify AVS_SPEAKER_VOLUME typed speakers.   |\n"
+    "|       AVS_SPEAKER_VOLUME Speakers Control Volume For:                      |\n"
+    "|             Speech, Content, Notification, Bluetooth.                      |\n"
+    "| Press '2' followed by Enter to modify AVS_ALERTS_VOLUME typed speakers.    |\n"
+    "|       AVS_ALERTS_VOLUME Speakers Control Volume For:                       |\n"
+    "|             Alerts.                                                        |\n"
     "+----------------------------------------------------------------------------+\n";
 
 static const std::string FIRMWARE_CONTROL_MESSAGE =
@@ -172,6 +212,25 @@ static const std::string RESET_CONFIRMATION =
 static const std::string RESET_WARNING =
     "Device was reset! Please don't forget to deregister it. For more details "
     "visit https://www.amazon.com/gp/help/customer/display.html?nodeId=201357520";
+
+static const std::string ENTER_LIMITED = "Entering limited interaction mode.";
+
+UIManager::UIManager() :
+        m_dialogState{DialogUXState::IDLE},
+        m_capabilitiesState{CapabilitiesObserverInterface::State::UNINITIALIZED},
+        m_capabilitiesError{CapabilitiesObserverInterface::Error::UNINITIALIZED},
+        m_authState{AuthObserverInterface::State::UNINITIALIZED},
+        m_authCheckCounter{0},
+        m_connectionStatus{avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::DISCONNECTED} {
+}
+
+static const std::string COMMS_MESSAGE =
+    "+----------------------------------------------------------------------------+\n"
+    "|                          Comms Options:                                    |\n"
+    "|                                                                            |\n"
+    "| Press 'a' followed by Enter to accept an incoming call.                    |\n"
+    "| Press 's' followed by Enter to stop an ongoing call.                       |\n"
+    "+----------------------------------------------------------------------------+\n";
 
 void UIManager::onDialogUXStateChanged(DialogUXState state) {
     m_executor.submit([this, state]() {
@@ -224,6 +283,16 @@ void UIManager::onSetIndicator(avsCommon::avs::IndicatorState state) {
     });
 }
 
+void UIManager::onRequestAuthorization(const std::string& url, const std::string& code) {
+    m_executor.submit([this, url, code]() {
+        m_authCheckCounter = 0;
+        ConsolePrinter::prettyPrint("NOT YET AUTHORIZED");
+        std::ostringstream oss;
+        oss << "To authorize, browse to: '" << url << "' and enter the code: " << code;
+        ConsolePrinter::prettyPrint(oss.str());
+    });
+}
+
 void UIManager::onAlertStateChange(
     const std::string& alertToken,
     alexaClientSDK::capabilityAgents::alerts::AlertObserverInterface::State state,
@@ -233,7 +302,55 @@ void UIManager::onAlertStateChange(
         oss << "ALERT STATE: " << state;
         ConsolePrinter::prettyPrint(oss.str());
         ledSetState(toLedState(state));
+    });
+}
 
+void UIManager::onCheckingForAuthorization() {
+    m_executor.submit([this]() {
+        std::ostringstream oss;
+        oss << "Checking for authorization (" << ++m_authCheckCounter << ")...";
+        ConsolePrinter::prettyPrint(oss.str());
+    });
+}
+
+void UIManager::onAuthStateChange(AuthObserverInterface::State newState, AuthObserverInterface::Error newError) {
+    m_executor.submit([this, newState, newError]() {
+        if (m_authState != newState) {
+            m_authState = newState;
+            switch (m_authState) {
+                case AuthObserverInterface::State::UNINITIALIZED:
+                    break;
+                case AuthObserverInterface::State::REFRESHED:
+                    ConsolePrinter::prettyPrint("Authorized!");
+                    break;
+                case AuthObserverInterface::State::EXPIRED:
+                    ConsolePrinter::prettyPrint("AUTHORIZATION EXPIRED");
+                    break;
+                case AuthObserverInterface::State::UNRECOVERABLE_ERROR:
+                    std::ostringstream oss;
+                    oss << "UNRECOVERABLE AUTHORIZATION ERROR: " << newError;
+                    ConsolePrinter::prettyPrint({oss.str(), ENTER_LIMITED});
+                    setFailureStatus(AUTH_FAILED_STR);
+                    break;
+            }
+        }
+    });
+}
+
+void UIManager::onCapabilitiesStateChange(
+    CapabilitiesObserverInterface::State newState,
+    CapabilitiesObserverInterface::Error newError) {
+    m_executor.submit([this, newState, newError]() {
+        if ((m_capabilitiesState != newState) && (m_capabilitiesError != newError)) {
+            m_capabilitiesState = newState;
+            m_capabilitiesError = newError;
+            if (CapabilitiesObserverInterface::State::FATAL_ERROR == m_capabilitiesState) {
+                std::ostringstream oss;
+                oss << "UNRECOVERABLE CAPABILITIES API ERROR: " << m_capabilitiesError;
+                ConsolePrinter::prettyPrint({oss.str(), ENTER_LIMITED});
+                setFailureStatus(CAPABILITIES_API_FAILED_STR);
+            }
+        }
     });
 }
 
@@ -244,9 +361,13 @@ void UIManager::printWelcomeScreen() {
         ledSetState(toLedState(DialogUXState::IDLE));
     });
 }
-
 void UIManager::printHelpScreen() {
     m_executor.submit([]() { ConsolePrinter::simplePrint(HELP_MESSAGE); });
+}
+
+void UIManager::printLimitedHelp() {
+    m_executor.submit(
+        [this]() { ConsolePrinter::simplePrint(LIMITED_HELP_HEADER + m_failureStatus + LIMITED_HELP_MESSAGE); });
 }
 
 void UIManager::printSettingsScreen() {
@@ -282,6 +403,10 @@ void UIManager::printESPControlScreen(bool support, const std::string& voiceEner
     });
 }
 
+void UIManager::printCommsControlScreen() {
+    m_executor.submit([]() { ConsolePrinter::simplePrint(COMMS_MESSAGE); });
+}
+
 void UIManager::printErrorScreen() {
     m_executor.submit([]() { ConsolePrinter::prettyPrint("Invalid Option"); });
 }
@@ -315,6 +440,52 @@ void UIManager::microphoneOn() {
 #endif
     });
 }
+
+void UIManager::printState() {
+    if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::DISCONNECTED) {
+        ConsolePrinter::prettyPrint("Client not connected!");
+    } else if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::PENDING) {
+        ConsolePrinter::prettyPrint("Connecting...");
+    } else if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::CONNECTED) {
+        switch (m_dialogState) {
+            case DialogUXState::IDLE:
+                ConsolePrinter::prettyPrint("Alexa is currently idle!");
+                return;
+            case DialogUXState::LISTENING:
+                ConsolePrinter::prettyPrint("Listening...");
+                return;
+            case DialogUXState::THINKING:
+                ConsolePrinter::prettyPrint("Thinking...");
+                return;
+                ;
+            case DialogUXState::SPEAKING:
+                ConsolePrinter::prettyPrint("Speaking...");
+                return;
+	    case DialogUXState::MIC_OFF:
+                ConsolePrinter::prettyPrint("Mic_off...");
+		break;
+            /*
+             * This is an intermediate state after a SPEAK directive is completed. In the case of a speech burst the
+             * next SPEAK could kick in or if its the last SPEAK directive ALEXA moves to the IDLE state. So we do
+             * nothing for this state.
+             */
+            case DialogUXState::FINISHED:
+                return;
+        }
+    }
+}
+
+/*
+void UIManager::printState() {
+    if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::DISCONNECTED) {
+        ConsolePrinter::prettyPrint("Client not connected!");
+    } else if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::PENDING) {
+        ConsolePrinter::prettyPrint("Connecting...");
+    } else if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::CONNECTED) {
+	ConsolePrinter::prettyPrint(DialogUXStateObserverInterface::stateToString(m_dialogState));
+    }
+}
+*/
 
 const char* UIManager::toLedState(DialogUXState state)
 {
@@ -390,15 +561,6 @@ void UIManager::ledSetVolume(unsigned int volume) {
     }
 }
 
-void UIManager::printState() {
-    if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::DISCONNECTED) {
-        ConsolePrinter::prettyPrint("Client not connected!");
-    } else if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::PENDING) {
-        ConsolePrinter::prettyPrint("Connecting...");
-    } else if (m_connectionStatus == avsCommon::sdkInterfaces::ConnectionStatusObserverInterface::Status::CONNECTED) {
-	ConsolePrinter::prettyPrint(DialogUXStateObserverInterface::stateToString(m_dialogState));
-    }
-}
 
 void UIManager::printESPDataOverrideNotSupported() {
     m_executor.submit([]() { ConsolePrinter::simplePrint("Cannot override ESP Value in this device."); });
@@ -406,6 +568,17 @@ void UIManager::printESPDataOverrideNotSupported() {
 
 void UIManager::printESPNotSupported() {
     m_executor.submit([]() { ConsolePrinter::simplePrint("ESP is not supported in this device."); });
+}
+
+void UIManager::printCommsNotSupported() {
+    m_executor.submit([]() { ConsolePrinter::simplePrint("Comms is not supported in this device."); });
+}
+
+void UIManager::setFailureStatus(const std::string& status) {
+    if (!status.empty() && status != m_failureStatus) {
+        m_failureStatus = status;
+        printLimitedHelp();
+    }
 }
 
 }  // namespace sampleApp

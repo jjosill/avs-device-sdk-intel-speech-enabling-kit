@@ -46,6 +46,8 @@ using namespace avsCommon::utils::configuration;
 static const std::string TAG("MediaPlayer");
 
 static const std::string MEDIAPLAYER_CONFIGURATION_ROOT_KEY = "gstreamerMediaPlayer";
+/// The key in our config file to set the audioSink.
+static const std::string MEDIAPLAYER_AUDIO_SINK_KEY = "audioSink";
 /// The key in our config file to find the output conversion type.
 static const std::string MEDIAPLAYER_OUTPUT_CONVERSION_ROOT_KEY = "outputConversion";
 /// The acceptable conversion keys to find in the config file
@@ -88,9 +90,6 @@ static const int8_t GST_ADJUST_VOLUME_MAX = 1;
 
 /// Represents the zero volume to avoid the actual 0.0 value. Used as a fix for GStreamer crashing on 0 volume for PCM.
 static const gdouble VOLUME_ZERO = 0.0000001;
-
-/// The amount to wait before stopping the pipeline on an end-of-stream message to avoid cutting audio short prematurely
-static const std::chrono::milliseconds SLEEP_AFTER_END_OF_AUDIO{300};
 
 /**
  * Processes tags found in the tagList.
@@ -165,8 +164,10 @@ MediaPlayer::~MediaPlayer() {
     gst_object_unref(m_pipeline.pipeline);
     resetPipeline();
 
-    g_source_remove(m_busWatchId);
+    removeSource(m_busWatchId);
     g_main_loop_unref(m_mainLoop);
+
+    g_main_context_unref(m_workerContext);
 }
 
 MediaPlayer::SourceId MediaPlayer::setSource(
@@ -550,36 +551,47 @@ MediaPlayer::MediaPlayer(
         m_pauseImmediately{false} {
 }
 
+void MediaPlayer::workerLoop() {
+    g_main_context_push_thread_default(m_workerContext);
+
+    // Add bus watch only after calling g_main_context_push_thread_default.
+    GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(m_pipeline.pipeline));
+    m_busWatchId = gst_bus_add_watch(bus, &MediaPlayer::onBusMessage, this);
+    gst_object_unref(bus);
+
+    g_main_loop_run(m_mainLoop);
+
+    g_main_context_pop_thread_default(m_workerContext);
+}
+
 bool MediaPlayer::init() {
-    if (false == gst_init_check(NULL, NULL, NULL)) {
-        ACSDK_ERROR(LX("initPlayerFailed").d("reason", "gstInitCheckFailed"));
+    m_workerContext = g_main_context_new();
+    if (!m_workerContext) {
+        ACSDK_ERROR(LX("initPlayerFailed").d("reason", "nullWorkerContext"));
         return false;
     }
 
-    if (!(m_mainLoop = g_main_loop_new(nullptr, false))) {
+    if (!(m_mainLoop = g_main_loop_new(m_workerContext, false))) {
         ACSDK_ERROR(LX("initPlayerFailed").d("reason", "gstMainLoopNewFailed"));
         return false;
     };
 
-    m_mainLoopThread = std::thread(g_main_loop_run, m_mainLoop);
+    if (false == gst_init_check(NULL, NULL, NULL)) {
+        ACSDK_ERROR(LX("initPlayerFailed").d("reason", "gstInitCheckFailed"));
+        return false;
+    }
 
     if (!setupPipeline()) {
         ACSDK_ERROR(LX("initPlayerFailed").d("reason", "setupPipelineFailed"));
         return false;
     }
 
+    m_mainLoopThread = std::thread(&MediaPlayer::workerLoop, this);
+
     return true;
 }
 
 bool MediaPlayer::setupPipeline() {
-    m_pipeline.decodedQueue = gst_element_factory_make("queue", "decodedQueue");
-    // Do not send signals or messages. Let the decoder buffer messages dictate application logic.
-    g_object_set(m_pipeline.decodedQueue, "silent", TRUE, NULL);
-    if (!m_pipeline.decodedQueue) {
-        ACSDK_ERROR(LX("setupPipelineFailed").d("reason", "createQueueElementFailed"));
-        return false;
-    }
-
     m_pipeline.converter = gst_element_factory_make("audioconvert", "converter");
     if (!m_pipeline.converter) {
         ACSDK_ERROR(LX("setupPipelineFailed").d("reason", "createConverterElementFailed"));
@@ -592,9 +604,14 @@ bool MediaPlayer::setupPipeline() {
         return false;
     }
 
-    m_pipeline.audioSink = gst_element_factory_make("autoaudiosink", "audio_sink");
+    std::string audioSinkElement;
+    ConfigurationNode::getRoot()[MEDIAPLAYER_CONFIGURATION_ROOT_KEY].getString(
+        MEDIAPLAYER_AUDIO_SINK_KEY, &audioSinkElement, "autoaudiosink");
+    m_pipeline.audioSink = gst_element_factory_make(audioSinkElement.c_str(), "audio_sink");
     if (!m_pipeline.audioSink) {
-        ACSDK_ERROR(LX("setupPipelineFailed").d("reason", "createAudioSinkElementFailed"));
+        ACSDK_ERROR(LX("setupPipelineFailed")
+                        .d("reason", "createAudioSinkElementFailed")
+                        .d("audioSinkElement", audioSinkElement));
         return false;
     }
 
@@ -657,45 +674,22 @@ bool MediaPlayer::setupPipeline() {
     // clean up caps object
     gst_caps_unref(caps);
 
-    /*
-     * Certain music sources, specifically Audible, were unable to play properly. With Audible, frames were getting
-     * dropped and the audio would play very choppily. For example, in a 10 second chunk, seconds 1-5 would play
-     * followed immediately by seconds 6.5-7.5, followed by 8.5-10. Setting this property to false prevents the sink
-     * from dropping frames because they arrive too late.
-     * TODO: Investigate why frames are arriving late to the sink causing MPEG-TS files to play choppily
-     */
-    g_object_set(m_pipeline.audioSink, "sync", FALSE, NULL);
-
     m_pipeline.pipeline = gst_pipeline_new("audio-pipeline");
     if (!m_pipeline.pipeline) {
         ACSDK_ERROR(LX("setupPipelineFailed").d("reason", "createPipelineElementFailed"));
         return false;
     }
 
-    GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(m_pipeline.pipeline));
-    m_busWatchId = gst_bus_add_watch(bus, &MediaPlayer::onBusMessage, this);
-    gst_object_unref(bus);
-
     // Link only the queue, converter, volume, and sink here. Src will be linked in respective source files.
     gst_bin_add_many(
-        GST_BIN(m_pipeline.pipeline),
-        m_pipeline.decodedQueue,
-        m_pipeline.converter,
-        m_pipeline.volume,
-        m_pipeline.audioSink,
-        nullptr);
+        GST_BIN(m_pipeline.pipeline), m_pipeline.converter, m_pipeline.volume, m_pipeline.audioSink, nullptr);
 
     if (m_pipeline.resample != nullptr && m_pipeline.caps != nullptr) {
         // Set up pipeline with the resampler
         gst_bin_add_many(GST_BIN(m_pipeline.pipeline), m_pipeline.resample, m_pipeline.caps, nullptr);
 
         if (!gst_element_link_many(
-                m_pipeline.decodedQueue,
-                m_pipeline.converter,
-                m_pipeline.volume,
-                m_pipeline.resample,
-                m_pipeline.caps,
-                nullptr)) {
+                m_pipeline.converter, m_pipeline.volume, m_pipeline.resample, m_pipeline.caps, nullptr)) {
             ACSDK_ERROR(LX("setupPipelineFailed").d("reason", "createVolumeToConverterLinkFailed"));
             return false;
         }
@@ -706,8 +700,7 @@ bool MediaPlayer::setupPipeline() {
         }
     } else {
         // No output format specified, set up a normal pipeline
-        if (!gst_element_link_many(
-                m_pipeline.decodedQueue, m_pipeline.converter, m_pipeline.volume, m_pipeline.audioSink, nullptr)) {
+        if (!gst_element_link_many(m_pipeline.converter, m_pipeline.volume, m_pipeline.audioSink, nullptr)) {
             ACSDK_ERROR(LX("setupPipelineFailed").d("reason", "createResampleToSinkLinkFailed"));
             return false;
         }
@@ -733,6 +726,10 @@ void MediaPlayer::tearDownTransientPipelineElements() {
     m_playbackFinishedSent = false;
     m_isPaused = false;
     m_isBufferUnderrun = false;
+    if (m_pipeline.audioSink) {
+        // Set audioSink's sink option back to TRUE
+        g_object_set(m_pipeline.audioSink, "sync", TRUE, NULL);
+    }
 }
 
 void MediaPlayer::resetPipeline() {
@@ -740,7 +737,6 @@ void MediaPlayer::resetPipeline() {
     m_pipeline.pipeline = nullptr;
     m_pipeline.appsrc = nullptr;
     m_pipeline.decoder = nullptr;
-    m_pipeline.decodedQueue = nullptr;
     m_pipeline.converter = nullptr;
     m_pipeline.volume = nullptr;
     m_pipeline.resample = nullptr;
@@ -794,7 +790,27 @@ guint MediaPlayer::queueCallback(const std::function<gboolean()>* callback) {
     if (isShutdown()) {
         return UNQUEUED_CALLBACK;
     }
-    return g_idle_add(reinterpret_cast<GSourceFunc>(&onCallback), const_cast<std::function<gboolean()>*>(callback));
+    auto source = g_idle_source_new();
+    g_source_set_callback(
+        source, reinterpret_cast<GSourceFunc>(&onCallback), const_cast<std::function<gboolean()>*>(callback), nullptr);
+    auto sourceId = g_source_attach(source, m_workerContext);
+    g_source_unref(source);
+    return sourceId;
+}
+
+guint MediaPlayer::attachSource(GSource* source) {
+    if (source) {
+        return g_source_attach(source, m_workerContext);
+    }
+    return UNQUEUED_CALLBACK;
+}
+
+gboolean MediaPlayer::removeSource(guint tag) {
+    auto source = g_main_context_find_source_by_id(m_workerContext, tag);
+    if (source) {
+        g_source_destroy(source);
+    }
+    return true;
 }
 
 void MediaPlayer::onError() {
@@ -804,7 +820,10 @@ void MediaPlayer::onError() {
      * to be non-blocking.  To do this, we are creating a static callback function with the this pointer passed in as
      * a parameter.
      */
-    g_idle_add(reinterpret_cast<GSourceFunc>(&onErrorCallback), this);
+    auto source = g_idle_source_new();
+    g_source_set_callback(source, reinterpret_cast<GSourceFunc>(&onErrorCallback), this, nullptr);
+    g_source_attach(source, m_workerContext);
+    g_source_unref(source);
 }
 
 void MediaPlayer::doShutdown() {
@@ -840,7 +859,7 @@ void MediaPlayer::onPadAdded(GstElement* decoder, GstPad* pad, gpointer pointer)
 
 void MediaPlayer::handlePadAdded(std::promise<void>* promise, GstElement* decoder, GstPad* pad) {
     ACSDK_DEBUG9(LX("handlePadAddedSignalCalled"));
-    gst_element_link(decoder, m_pipeline.decodedQueue);
+    gst_element_link(decoder, m_pipeline.converter);
     promise->set_value();
 }
 
@@ -871,13 +890,6 @@ gboolean MediaPlayer::handleBusMessage(GstMessage* message) {
         LX("messageReceived").d("type", GST_MESSAGE_TYPE_NAME(message)).d("source", GST_MESSAGE_SRC_NAME(message)));
     switch (GST_MESSAGE_TYPE(message)) {
         case GST_MESSAGE_EOS:
-            /*
-             * As a result of setting the "sync" property to false, we get notified of end-of-stream messages from
-             * GStreamer a bit prematurely. For example in the last couple hundred milliseconds or so. Setting this
-             * sleep allows the Speak to completely finish before tearing down the pipeline.
-             * TODO: ACSDK-828 Figure out why the end-of-stream message is coming prematurely and fix if possible.
-             */
-            std::this_thread::sleep_for(SLEEP_AFTER_END_OF_AUDIO);
             if (GST_MESSAGE_SRC(message) == GST_OBJECT_CAST(m_pipeline.pipeline)) {
                 if (!m_source->handleEndOfStream()) {
                     const std::string errorMessage{"reason=sourceHandleEndOfStreamFailed"};
@@ -980,9 +992,39 @@ gboolean MediaPlayer::handleBusMessage(GstMessage* message) {
                 } else if (newState == GST_STATE_NULL && oldState == GST_STATE_READY) {
                     sendPlaybackStopped();
                 }
+            } else if (g_str_has_prefix(GST_MESSAGE_SRC_NAME(message), "tsdemux")) {
+                /*
+                 * tsdemux element can be used to determine if the music sources are MPEG-TS.
+                 */
+                GstState oldState;
+                GstState newState;
+                GstState pendingState;
+                gst_message_parse_state_changed(message, &oldState, &newState, &pendingState);
+                ACSDK_DEBUG5(LX("tsdemux State Change")
+                                 .d("oldState", gst_element_state_get_name(oldState))
+                                 .d("newState", gst_element_state_get_name(newState))
+                                 .d("pendingState", gst_element_state_get_name(pendingState)));
+
+                if (GST_STATE_READY == newState) {
+                    /*
+                     * Certain music sources, specifically Audible, were unable to play properly. With Audible, frames
+                     * were getting dropped and the audio would play very choppily. For example, in a 10 second chunk,
+                     * seconds 1-5 would play followed immediately by seconds 6.5-7.5, followed by 8.5-10. Setting this
+                     * property to false prevents the sink from dropping frames because they arrive too late.
+                     * TODO: (ACSDK-828) Investigate why frames are arriving late to the sink causing MPEG-TS files to
+                     * play choppily
+                     */
+                    ACSDK_DEBUG5(LX("audioSink").m("Sync option set to false."));
+                    g_object_set(m_pipeline.audioSink, "sync", FALSE, NULL);
+                } else if (GST_STATE_NULL == newState) {
+                    // Reset sync state back to true if tsdemux changes to NULL state
+                    ACSDK_DEBUG5(LX("audioSink").m("Sync option set to true."));
+                    g_object_set(m_pipeline.audioSink, "sync", TRUE, NULL);
+                }
             }
             break;
         }
+
         case GST_MESSAGE_BUFFERING: {
             gint bufferPercent = 0;
             gst_message_parse_buffering(message, &bufferPercent);
@@ -1073,7 +1115,7 @@ void MediaPlayer::handleSetAttachmentReaderSource(
 
     /*
      * Once the source pad for the decoder has been added, the decoder emits the pad-added signal. Connect the signal
-     * to the callback which performs the linking of the decoder source pad to decodedQueue sink pad.
+     * to the callback which performs the linking of the decoder source pad to converter sink pad.
      */
     if (!g_signal_connect(m_pipeline.decoder, "pad-added", G_CALLBACK(onPadAdded), this)) {
         ACSDK_ERROR(LX("handleSetAttachmentReaderSourceFailed").d("reason", "connectPadAddedSignalFailed"));
@@ -1105,7 +1147,7 @@ void MediaPlayer::handleSetIStreamSource(
 
     /*
      * Once the source pad for the decoder has been added, the decoder emits the pad-added signal. Connect the signal
-     * to the callback which performs the linking of the decoder source pad to the decodedQueue sink pad.
+     * to the callback which performs the linking of the decoder source pad to the converter sink pad.
      */
     if (!g_signal_connect(m_pipeline.decoder, "pad-added", G_CALLBACK(onPadAdded), this)) {
         ACSDK_ERROR(LX("handleSetIStreamSourceFailed").d("reason", "connectPadAddedSignalFailed"));
@@ -1140,7 +1182,7 @@ void MediaPlayer::handleSetUrlSource(
         return;
     }
     std::shared_ptr<avsCommon::avs::attachment::AttachmentReader> reader =
-        attachment->createReader(sds::ReaderPolicy::BLOCKING);
+        attachment->createReader(sds::ReaderPolicy::NONBLOCKING);
     if (!reader) {
         ACSDK_ERROR(LX("setSourceUrlFailed").d("reason", "failedToCreateAttachmentReader"));
         promise->set_value(ERROR_SOURCE_ID);

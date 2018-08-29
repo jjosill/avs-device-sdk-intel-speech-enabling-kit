@@ -16,6 +16,7 @@
 #include <cctype>
 
 #include <AVSCommon/SDKInterfaces/SpeakerInterface.h>
+#include <AVSCommon/Utils/Logger/Logger.h>
 #include <AVSCommon/Utils/String/StringUtils.h>
 #include "SampleApp/UserInputManager.h"
 #include "SampleApp/ConsolePrinter.h"
@@ -41,29 +42,49 @@ static const char SPEAKER_CONTROL = 'p';
 static const char FIRMWARE_VERSION = 'f';
 static const char ESP_CONTROL = 'e';
 static const char RESET = 'k';
+#ifdef ENABLE_COMMS
+static const char COMMS_CONTROL = 'd';
+#endif
 
 enum class SettingsValues : char { LOCALE = '1' };
 
-static const std::unordered_map<char, std::string> LOCALE_VALUES(
-    {{'1', "en-US"}, {'2', "en-GB"}, {'3', "de-DE"}, {'4', "en-IN"}, {'5', "en-CA"}, {'6', "ja-JP"}, {'7', "en-AU"}});
+static const std::unordered_map<char, std::string> LOCALE_VALUES({{'1', "en-US"},
+                                                                  {'2', "en-GB"},
+                                                                  {'3', "de-DE"},
+                                                                  {'4', "en-IN"},
+                                                                  {'5', "en-CA"},
+                                                                  {'6', "ja-JP"},
+                                                                  {'7', "en-AU"},
+                                                                  {'8', "fr-FR"}});
 
-static const std::unordered_map<char, SpeakerInterface::Type> SPEAKER_TYPES({{'1', SpeakerInterface::Type::AVS_SYNCED},
-                                                                             {'2', SpeakerInterface::Type::LOCAL}});
+static const std::unordered_map<char, SpeakerInterface::Type> SPEAKER_TYPES(
+    {{'1', SpeakerInterface::Type::AVS_SPEAKER_VOLUME}, {'2', SpeakerInterface::Type::AVS_ALERTS_VOLUME}});
 
 static const int8_t INCREASE_VOLUME = 10;
 
 static const int8_t DECREASE_VOLUME = -10;
 
+/// String to identify log entries originating from this file.
+static const std::string TAG("UserInputManager");
+
+/**
+ * Create a LogEntry using this file's TAG and the specified event string.
+ *
+ * @param The event string for this @c LogEntry.
+ */
+#define LX(event) alexaClientSDK::avsCommon::utils::logger::LogEntry(TAG, event)
+
 std::unique_ptr<UserInputManager> UserInputManager::create(std::shared_ptr<InteractionManager> interactionManager) {
     if (!interactionManager) {
-        ConsolePrinter::simplePrint("Invalid InteractionManager passed to UserInputManager");
+        ACSDK_CRITICAL(LX("Invalid InteractionManager passed to UserInputManager"));
         return nullptr;
     }
     return std::unique_ptr<UserInputManager>(new UserInputManager(interactionManager));
 }
 
 UserInputManager::UserInputManager(std::shared_ptr<InteractionManager> interactionManager) :
-        m_interactionManager{interactionManager} {
+        m_interactionManager{interactionManager},
+        m_limitedInteraction{false} {
 }
 
 void UserInputManager::run() {
@@ -76,18 +97,24 @@ void UserInputManager::run() {
         std::cin >> x;
         x = ::tolower(x);
         if (x == QUIT) {
-            m_interactionManager->shutdown();
             return;
-        } else if (x == INFO) {
-            m_interactionManager->help();
         } else if (x == MIC_TOGGLE) {
             m_interactionManager->microphoneToggle();
+        } else if (x == STOP) {
+            m_interactionManager->stopForegroundActivity();
+        } else if (x == INFO) {
+            if (m_limitedInteraction) {
+                m_interactionManager->limitedHelp();
+            } else {
+                m_interactionManager->help();
+            }
+        } else if (m_limitedInteraction) {
+            m_interactionManager->errorValue();
+            // ----- Add a new interaction bellow if the action is available only in 'unlimited interaction mode'.
         } else if (x == HOLD) {
             m_interactionManager->holdToggled();
         } else if (x == TAP) {
             m_interactionManager->tap();
-        } else if (x == STOP) {
-            m_interactionManager->stopForegroundActivity();
         } else if (x == PLAY) {
             m_interactionManager->playbackPlay();
         } else if (x == PAUSE) {
@@ -220,10 +247,106 @@ void UserInputManager::run() {
                         break;
                 }
             } while (!cancelReset);
+#ifdef ENABLE_COMMS
+        } else if (x == COMMS_CONTROL) {
+            m_interactionManager->commsControl();
+            char commsChoice;
+            bool continueWhileLoop = true;
+            while (continueWhileLoop) {
+                std::cin >> commsChoice;
+                switch (commsChoice) {
+                    case 'a':
+                    case 'A':
+                        m_interactionManager->acceptCall();
+                        break;
+                    case 's':
+                    case 'S':
+                        m_interactionManager->stopCall();
+                        break;
+                    case 'q':
+                        m_interactionManager->help();
+                        continueWhileLoop = false;
+                        break;
+                    default:
+                        m_interactionManager->errorValue();
+                        continueWhileLoop = false;
+                        break;
+                }
+            }
+#endif
         } else {
             m_interactionManager->errorValue();
         }
     }
+}
+
+void UserInputManager::onAuthStateChange(AuthObserverInterface::State newState, AuthObserverInterface::Error newError) {
+    m_limitedInteraction = m_limitedInteraction || (newState == AuthObserverInterface::State::UNRECOVERABLE_ERROR);
+}
+
+void UserInputManager::onCapabilitiesStateChange(
+    CapabilitiesObserverInterface::State newState,
+    CapabilitiesObserverInterface::Error newError) {
+    m_limitedInteraction = m_limitedInteraction || (newState == CapabilitiesObserverInterface::State::FATAL_ERROR);
+}
+
+void UserInputManager::controlSpeaker() {
+    m_interactionManager->speakerControl();
+    char speakerChoice;
+    std::cin >> speakerChoice;
+    if (SPEAKER_TYPES.count(speakerChoice) == 0) {
+        m_interactionManager->errorValue();
+    } else {
+        m_interactionManager->volumeControl();
+        SpeakerInterface::Type speaker = SPEAKER_TYPES.at(speakerChoice);
+        char volume;
+        while (std::cin >> volume && volume != 'q') {
+            switch (volume) {
+                case '1':
+                    m_interactionManager->adjustVolume(speaker, INCREASE_VOLUME);
+                    break;
+                case '2':
+                    m_interactionManager->adjustVolume(speaker, DECREASE_VOLUME);
+                    break;
+                case '3':
+                    m_interactionManager->setMute(speaker, true);
+                    break;
+                case '4':
+                    m_interactionManager->setMute(speaker, false);
+                    break;
+                case 'i':
+                    m_interactionManager->volumeControl();
+                    break;
+                default:
+                    m_interactionManager->errorValue();
+                    break;
+            }
+        }
+    }
+}
+
+bool UserInputManager::confirmReset() {
+    m_interactionManager->confirmResetDevice();
+    char y;
+    do {
+        std::cin >> y;
+        // Check the Setting which has to be changed.
+        switch (y) {
+            case 'Y':
+            case 'y':
+                m_interactionManager->resetDevice();
+                return true;
+            case 'N':
+            case 'n':
+                return false;
+            default:
+                m_interactionManager->errorValue();
+                m_interactionManager->confirmResetDevice();
+                break;
+        }
+    } while (true);
+
+    return false;
 }
 
 }  // namespace sampleApp

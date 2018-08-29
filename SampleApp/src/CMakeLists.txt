@@ -32,8 +32,10 @@ target_include_directories(SampleApp PUBLIC
 
 target_link_libraries(SampleApp 
     DefaultClient
-    AuthDelegate
+    CapabilitiesDelegate
+    CBLAuthDelegate
     MediaPlayer
+    SQLiteStorage
     ESP
     "${PORTAUDIO_LIB_PATH}"
     "${SOCKETIO_LIB_PATH}"

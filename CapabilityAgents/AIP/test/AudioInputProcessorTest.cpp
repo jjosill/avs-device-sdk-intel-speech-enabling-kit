@@ -15,6 +15,7 @@
 
 /// @file AudioInputProcessorTest.cpp
 
+#include <cstring>
 #include <climits>
 #include <numeric>
 #include <sstream>
@@ -32,7 +33,7 @@
 #include <AVSCommon/SDKInterfaces/MockFocusManager.h>
 #include <AVSCommon/SDKInterfaces/MockDirectiveHandlerResult.h>
 #include <AVSCommon/SDKInterfaces/MockExceptionEncounteredSender.h>
-#include <AVSCommon/SDKInterfaces/MockUserActivityNotifier.h>
+#include <AVSCommon/SDKInterfaces/MockUserInactivityMonitor.h>
 #include <AVSCommon/Utils/UUIDGeneration/UUIDGeneration.h>
 #include <AVSCommon/AVS/Attachment/MockAttachmentManager.h>
 #include <AVSCommon/Utils/JSON/JSONUtils.h>
@@ -216,6 +217,18 @@ static const std::string ESP_VOICE_ENERGY_KEY = "voiceEnergy";
 /// JSON key for the ambient energy field of a ReportEchoSpatialPerceptionData event.
 static const std::string ESP_AMBIENT_ENERGY_KEY = "ambientEnergy";
 
+/// The field name for the user voice attachment.
+static const std::string AUDIO_ATTACHMENT_FIELD_NAME = "audio";
+
+/// The field name for the wake word engine metadata.
+static const std::string KWD_METADATA_FIELD_NAME = "wakewordEngineMetadata";
+
+/// The index of the Wakeword engine metadata in the @c MessageRequest.
+static const size_t MESSAGE_ATTACHMENT_KWD_METADATA_INDEX = 0;
+
+/// Sample Wakeword engine metadata to compare with the @ AttachmentReader
+static const std::string KWD_METADATA_EXAMPLE = "Wakeword engine metadata example";
+
 /// Utility function to parse a JSON document.
 static rapidjson::Document parseJson(const std::string& json) {
     rapidjson::Document document;
@@ -263,7 +276,8 @@ public:
         avsCommon::avs::AudioInputStream::Index keywordEnd = AudioInputProcessor::INVALID_INDEX,
         std::string keyword = "",
         std::shared_ptr<std::string> avsInitiator = nullptr,
-        const ESPData& espData = ESPData::EMPTY_ESP_DATA);
+        const ESPData espData = ESPData::getEmptyESPData(),
+        const std::shared_ptr<std::vector<char>> KWDMetadata = nullptr);
 
     /**
      * This function sends a recognize event using the provided @c AudioInputProcessor and the recognize parameters
@@ -294,6 +308,16 @@ public:
      * @param dialogRequestId The expected dialogRequestId in the @c MessageRequest.
      */
     void verifyEspMessage(std::shared_ptr<avsCommon::avs::MessageRequest> request, const std::string& dialogRequestId);
+
+    /**
+     * This function verifies the metadata @c AttachmentReader created is correct
+     *
+     * @param request The @c MessageRequest to verify
+     * @param KWDMetadata The Wakeword engine metadata recevied by @c AudioInputProcessor::recognize
+     */
+    void verifyMetadata(
+        const std::shared_ptr<avsCommon::avs::MessageRequest> request,
+        const std::shared_ptr<std::vector<char>> KWDMetadata);
 
     /**
      * This function verifies that JSON content of a recognize @c MessageRequest is correct, and that it has an
@@ -337,8 +361,11 @@ private:
     /// The ESP data for this ReportEchoSpatialPerceptionData event.
     const ESPData m_espData;
 
-    /// The attachment reader saved by a call to @c verifyMessage().
-    std::shared_ptr<avsCommon::avs::attachment::AttachmentReader> m_reader;
+    /// The user voice attachment reader saved by a call to @c verifyMessage().
+    std::shared_ptr<avsCommon::avs::MessageRequest::NamedReader> m_reader;
+
+    /// The wake word engine metadata attachment reader saved by a call to @c verifyMessage().
+    std::shared_ptr<std::vector<char>> m_KWDMetadata;
 };
 
 RecognizeEvent::RecognizeEvent(
@@ -348,19 +375,21 @@ RecognizeEvent::RecognizeEvent(
     avsCommon::avs::AudioInputStream::Index keywordEnd,
     std::string keyword,
     std::shared_ptr<std::string> avsInitiator,
-    const ESPData& espData) :
+    const ESPData espData,
+    const std::shared_ptr<std::vector<char>> KWDMetadata) :
         m_audioProvider{audioProvider},
         m_initiator{initiator},
         m_begin{begin},
         m_keywordEnd{keywordEnd},
         m_keyword{keyword},
         m_avsInitiator{avsInitiator},
-        m_espData{espData} {
+        m_espData{espData},
+        m_KWDMetadata{KWDMetadata} {
 }
 
 std::future<bool> RecognizeEvent::send(std::shared_ptr<AudioInputProcessor> audioInputProcessor) {
-    auto result =
-        audioInputProcessor->recognize(m_audioProvider, m_initiator, m_begin, m_keywordEnd, m_keyword, m_espData);
+    auto result = audioInputProcessor->recognize(
+        m_audioProvider, m_initiator, m_begin, m_keywordEnd, m_keyword, m_espData, m_KWDMetadata);
     EXPECT_TRUE(result.valid());
     return result;
 }
@@ -400,6 +429,24 @@ void RecognizeEvent::verifyEspMessage(
     EXPECT_EQ(std::to_string(getJsonInt64(payload->value, ESP_AMBIENT_ENERGY_KEY)), m_espData.getAmbientEnergy());
 }
 
+void RecognizeEvent::verifyMetadata(
+    const std::shared_ptr<avsCommon::avs::MessageRequest> request,
+    const std::shared_ptr<std::vector<char>> KWDMetadata) {
+    if (!KWDMetadata) {
+        EXPECT_EQ(request->attachmentReadersCount(), 1);
+    } else {
+        char buffer[50];
+        auto readStatus = avsCommon::avs::attachment::AttachmentReader::ReadStatus::OK;
+
+        EXPECT_EQ(request->attachmentReadersCount(), 2);
+        EXPECT_NE(request->getAttachmentReader(MESSAGE_ATTACHMENT_KWD_METADATA_INDEX), nullptr);
+        auto bytesRead = request->getAttachmentReader(MESSAGE_ATTACHMENT_KWD_METADATA_INDEX)
+                             ->reader->read(buffer, KWD_METADATA_EXAMPLE.length(), &readStatus);
+
+        EXPECT_EQ(bytesRead, KWD_METADATA_EXAMPLE.length());
+        EXPECT_EQ(memcmp(buffer, KWD_METADATA_EXAMPLE.data(), KWD_METADATA_EXAMPLE.length()), 0);
+    }
+}
 void RecognizeEvent::verifyMessage(
     std::shared_ptr<avsCommon::avs::MessageRequest> request,
     const std::vector<Sample>& pattern,
@@ -459,16 +506,17 @@ void RecognizeEvent::verifyMessage(
         }
     }
 
-    m_reader = request->getAttachmentReader();
+    m_reader = request->getAttachmentReader(request->attachmentReadersCount() - 1);
     EXPECT_NE(m_reader, nullptr);
+    EXPECT_EQ(m_reader->name, AUDIO_ATTACHMENT_FIELD_NAME);
 
     std::vector<Sample> samples(PATTERN_WORDS);
     size_t samplesRead = 0;
     auto t0 = std::chrono::steady_clock::now();
     do {
         avsCommon::avs::attachment::AttachmentReader::ReadStatus status;
-        auto bytesRead =
-            m_reader->read(samples.data() + samplesRead, (samples.size() - samplesRead) * SDS_WORDSIZE, &status);
+        auto bytesRead = m_reader->reader->read(
+            samples.data() + samplesRead, (samples.size() - samplesRead) * SDS_WORDSIZE, &status);
         if (avsCommon::avs::attachment::AttachmentReader::ReadStatus::OK_WOULDBLOCK == status) {
             std::this_thread::yield();
             continue;
@@ -483,7 +531,7 @@ void RecognizeEvent::verifyMessage(
 }
 
 std::shared_ptr<avsCommon::avs::attachment::AttachmentReader> RecognizeEvent::getReader() {
-    return m_reader;
+    return m_reader->reader;
 }
 
 /// Class to monitor DialogUXStateAggregator for the @c THINKING state and automatically move it to @c IDLE.
@@ -566,7 +614,8 @@ protected:
         std::string keyword = "",
         RecognizeStopPoint stopPoint = RecognizeStopPoint::NONE,
         std::shared_ptr<std::string> avsInitiator = nullptr,
-        const ESPData& espData = ESPData::EMPTY_ESP_DATA);
+        const ESPData espData = ESPData::getEmptyESPData(),
+        const std::shared_ptr<std::vector<char>> KWDMetadata = nullptr);
 
     /**
      * Function to call @c AudioInputProcessor::stopCapture() and verify that it succeeds.
@@ -695,8 +744,8 @@ protected:
     /// The mock @c ExceptionEncounteredSenderInterface.
     std::shared_ptr<avsCommon::sdkInterfaces::test::MockExceptionEncounteredSender> m_mockExceptionEncounteredSender;
 
-    /// The mock @c UserActivityNotifierInterface.
-    std::shared_ptr<avsCommon::sdkInterfaces::test::MockUserActivityNotifier> m_mockUserActivityNotifier;
+    /// The mock @c UserInactivityMonitorInterface.
+    std::shared_ptr<avsCommon::sdkInterfaces::test::MockUserInactivityMonitor> m_mockUserInactivityMonitor;
 
     /// A @c AudioInputStream::Writer to write audio data to m_audioProvider.
     std::unique_ptr<avsCommon::avs::AudioInputStream::Writer> m_writer;
@@ -731,7 +780,7 @@ void AudioInputProcessorTest::SetUp() {
 
     m_mockExceptionEncounteredSender =
         std::make_shared<avsCommon::sdkInterfaces::test::MockExceptionEncounteredSender>();
-    m_mockUserActivityNotifier = std::make_shared<avsCommon::sdkInterfaces::test::MockUserActivityNotifier>();
+    m_mockUserInactivityMonitor = std::make_shared<avsCommon::sdkInterfaces::test::MockUserInactivityMonitor>();
     size_t bufferSize = avsCommon::avs::AudioInputStream::calculateBufferSize(SDS_WORDS, SDS_WORDSIZE, SDS_MAXREADERS);
     auto buffer = std::make_shared<avsCommon::avs::AudioInputStream::Buffer>(bufferSize);
     auto stream = avsCommon::avs::AudioInputStream::create(buffer, SDS_WORDSIZE, SDS_MAXREADERS);
@@ -754,7 +803,7 @@ void AudioInputProcessorTest::SetUp() {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     ASSERT_NE(m_audioInputProcessor, nullptr);
     m_audioInputProcessor->addObserver(m_dialogUXStateAggregator);
@@ -797,7 +846,8 @@ bool AudioInputProcessorTest::testRecognizeSucceeds(
     std::string keyword,
     RecognizeStopPoint stopPoint,
     std::shared_ptr<std::string> avsInitiator,
-    const ESPData& espData) {
+    const ESPData espData,
+    const std::shared_ptr<std::vector<char>> KWDMetadata) {
     std::mutex mutex;
     std::condition_variable conditionVariable;
 
@@ -816,8 +866,8 @@ bool AudioInputProcessorTest::testRecognizeSucceeds(
     rapidjson::Writer<rapidjson::StringBuffer> contextWriter(contextBuffer);
     contextDocument.Accept(contextWriter);
     std::string contextJson = contextBuffer.GetString();
-    m_recognizeEvent =
-        std::make_shared<RecognizeEvent>(audioProvider, initiator, begin, keywordEnd, keyword, avsInitiator, espData);
+    m_recognizeEvent = std::make_shared<RecognizeEvent>(
+        audioProvider, initiator, begin, keywordEnd, keyword, avsInitiator, espData, KWDMetadata);
     if (keyword.empty()) {
         EXPECT_CALL(*m_mockContextManager, getContext(_)).WillOnce(InvokeWithoutArgs([this] {
             m_audioInputProcessor->provideState(STOP_CAPTURE, STATE_REQUEST_TOKEN);
@@ -852,7 +902,7 @@ bool AudioInputProcessorTest::testRecognizeSucceeds(
     }
 
     if (!bargeIn) {
-        EXPECT_CALL(*m_mockUserActivityNotifier, onUserActive()).Times(2);
+        EXPECT_CALL(*m_mockUserInactivityMonitor, onUserActive()).Times(2);
         EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::RECOGNIZING));
         EXPECT_CALL(*m_mockFocusManager, acquireChannel(CHANNEL_NAME, _, NAMESPACE))
             .WillOnce(InvokeWithoutArgs([this, stopPoint] {
@@ -878,7 +928,8 @@ bool AudioInputProcessorTest::testRecognizeSucceeds(
         }
         EXPECT_CALL(*m_mockMessageSender, sendMessage(_))
             .WillOnce(DoAll(
-                Invoke([this](std::shared_ptr<avsCommon::avs::MessageRequest> request) {
+                Invoke([this, KWDMetadata](std::shared_ptr<avsCommon::avs::MessageRequest> request) {
+                    m_recognizeEvent->verifyMetadata(request, KWDMetadata);
                     m_recognizeEvent->verifyMessage(request, m_pattern, m_dialogRequestId);
                 }),
                 InvokeWithoutArgs([&] {
@@ -956,7 +1007,7 @@ bool AudioInputProcessorTest::testContextFailure(avsCommon::sdkInterfaces::Conte
         m_audioInputProcessor->onContextFailure(error);
     }));
     EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::RECOGNIZING));
-    EXPECT_CALL(*m_mockUserActivityNotifier, onUserActive()).Times(2);
+    EXPECT_CALL(*m_mockUserInactivityMonitor, onUserActive()).Times(2);
     EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::IDLE))
         .WillOnce(InvokeWithoutArgs([&] {
             std::lock_guard<std::mutex> lock(mutex);
@@ -1038,7 +1089,7 @@ bool AudioInputProcessorTest::testExpectSpeechSucceeds(bool withDialogRequestId)
 
     EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::EXPECTING_SPEECH));
     EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::RECOGNIZING));
-    EXPECT_CALL(*m_mockUserActivityNotifier, onUserActive()).Times(2);
+    EXPECT_CALL(*m_mockUserInactivityMonitor, onUserActive()).Times(2);
     if (withDialogRequestId) {
         EXPECT_CALL(*result, setCompleted());
     }
@@ -1175,7 +1226,7 @@ bool AudioInputProcessorTest::testRecognizeWithExpectSpeechInitiator(bool withIn
     EXPECT_CALL(*result, setCompleted());
     EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::EXPECTING_SPEECH));
     EXPECT_CALL(*m_mockObserver, onStateChanged(AudioInputProcessorObserverInterface::State::RECOGNIZING));
-    EXPECT_CALL(*m_mockUserActivityNotifier, onUserActive()).Times(2);
+    EXPECT_CALL(*m_mockUserInactivityMonitor, onUserActive()).Times(2);
     EXPECT_CALL(*m_mockContextManager, getContext(_));
     EXPECT_CALL(*m_mockDirectiveSequencer, setDialogRequestId(_));
 
@@ -1258,7 +1309,7 @@ void AudioInputProcessorTest::verifyExpectSpeechTimedOut(std::shared_ptr<avsComm
     EXPECT_EQ(getJsonString(header->value, MESSAGE_NAME_KEY), EXPECT_SPEECH_TIMED_OUT_EVENT_NAME);
     EXPECT_NE(getJsonString(header->value, MESSAGE_MESSAGE_ID_KEY), "");
 
-    EXPECT_EQ(request->getAttachmentReader(), nullptr);
+    EXPECT_EQ(request->attachmentReadersCount(), 0);
 }
 
 void AudioInputProcessorTest::removeDefaultAudioProvider() {
@@ -1271,7 +1322,7 @@ void AudioInputProcessorTest::removeDefaultAudioProvider() {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier);
+        m_mockUserInactivityMonitor);
     EXPECT_NE(m_audioInputProcessor, nullptr);
     m_audioInputProcessor->addObserver(m_mockObserver);
     m_audioInputProcessor->addObserver(m_dialogUXStateAggregator);
@@ -1288,7 +1339,7 @@ void AudioInputProcessorTest::makeDefaultAudioProviderNotAlwaysReadable() {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_NE(m_audioInputProcessor, nullptr);
     m_audioInputProcessor->addObserver(m_mockObserver);
@@ -1330,7 +1381,7 @@ TEST_F(AudioInputProcessorTest, createWithoutDirectiveSequencer) {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_EQ(m_audioInputProcessor, nullptr);
 }
@@ -1345,7 +1396,7 @@ TEST_F(AudioInputProcessorTest, createWithoutMessageSender) {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_EQ(m_audioInputProcessor, nullptr);
 }
@@ -1360,7 +1411,7 @@ TEST_F(AudioInputProcessorTest, createWithoutContextManager) {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_EQ(m_audioInputProcessor, nullptr);
 }
@@ -1375,7 +1426,7 @@ TEST_F(AudioInputProcessorTest, createWithoutFocusManager) {
         nullptr,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_EQ(m_audioInputProcessor, nullptr);
 }
@@ -1390,7 +1441,7 @@ TEST_F(AudioInputProcessorTest, createWithoutStateAggregator) {
         m_mockFocusManager,
         nullptr,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_EQ(m_audioInputProcessor, nullptr);
 }
@@ -1408,16 +1459,16 @@ TEST_F(AudioInputProcessorTest, createWithoutExceptionSender) {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         nullptr,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         *m_audioProvider);
     EXPECT_EQ(m_audioInputProcessor, nullptr);
 }
 
 /**
  * Function to verify that @c AudioInputProcessor::create() errors out with an invalid
- * @c UserActivityNotifierInterface.
+ * @c UserInactivityMonitorInterface.
  */
-TEST_F(AudioInputProcessorTest, createWithoutUserActivityNotifier) {
+TEST_F(AudioInputProcessorTest, createWithoutUserInactivityMonitor) {
     m_audioInputProcessor->removeObserver(m_dialogUXStateAggregator);
     m_audioInputProcessor = AudioInputProcessor::create(
         m_mockDirectiveSequencer,
@@ -1442,7 +1493,7 @@ TEST_F(AudioInputProcessorTest, createWithoutAudioProvider) {
         m_mockFocusManager,
         m_dialogUXStateAggregator,
         m_mockExceptionEncounteredSender,
-        m_mockUserActivityNotifier,
+        m_mockUserInactivityMonitor,
         AudioProvider::null());
     EXPECT_NE(m_audioInputProcessor, nullptr);
 }
@@ -1963,6 +2014,30 @@ TEST_F(AudioInputProcessorTest, recognizeOPUSWithWakeWord) {
     m_audioProvider->format.sampleRateHz = 32000;
     EXPECT_TRUE(testRecognizeSucceeds(*m_audioProvider, Initiator::WAKEWORD, begin, end, KEYWORD_TEXT));
 }
+
+/**
+ * This function verifies that @c AudioInputProcessor::recognize() creates a @c MessageRequest with KWDMetadata
+ * When metadata has been received
+ */
+TEST_F(AudioInputProcessorTest, recognizeWakewordWithKWDMetadata) {
+    auto begin = AudioInputProcessor::INVALID_INDEX;
+    auto end = AudioInputProcessor::INVALID_INDEX;
+
+    auto metadata = std::make_shared<std::vector<char>>();
+    metadata->assign(KWD_METADATA_EXAMPLE.data(), KWD_METADATA_EXAMPLE.data() + KWD_METADATA_EXAMPLE.length());
+
+    EXPECT_TRUE(testRecognizeSucceeds(
+        *m_audioProvider,
+        Initiator::WAKEWORD,
+        begin,
+        end,
+        KEYWORD_TEXT,
+        RecognizeStopPoint::NONE,
+        nullptr,
+        ESPData::getEmptyESPData(),
+        metadata));
+}
+
 }  // namespace test
 }  // namespace aip
 }  // namespace capabilityAgents

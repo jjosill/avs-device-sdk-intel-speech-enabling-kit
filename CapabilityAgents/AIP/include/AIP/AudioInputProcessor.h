@@ -18,9 +18,12 @@
 
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include <AVSCommon/AVS/Attachment/InProcessAttachmentReader.h>
 #include <AVSCommon/AVS/CapabilityAgent.h>
+#include <AVSCommon/AVS/CapabilityConfiguration.h>
+#include <AVSCommon/SDKInterfaces/CapabilityConfigurationInterface.h>
 #include <AVSCommon/AVS/DirectiveHandlerConfiguration.h>
 #include <AVSCommon/AVS/DialogUXStateAggregator.h>
 #include <AVSCommon/SDKInterfaces/AudioInputProcessorObserverInterface.h>
@@ -32,7 +35,7 @@
 #include <AVSCommon/SDKInterfaces/FocusManagerInterface.h>
 #include <AVSCommon/SDKInterfaces/MessageRequestObserverInterface.h>
 #include <AVSCommon/SDKInterfaces/MessageSenderInterface.h>
-#include <AVSCommon/SDKInterfaces/UserActivityNotifierInterface.h>
+#include <AVSCommon/SDKInterfaces/UserInactivityMonitorInterface.h>
 #include <AVSCommon/Utils/RequiresShutdown.h>
 #include <AVSCommon/Utils/Threading/Executor.h>
 #include <AVSCommon/Utils/Timing/Timer.h>
@@ -58,6 +61,7 @@ namespace aip {
  */
 class AudioInputProcessor
         : public avsCommon::avs::CapabilityAgent
+        , public avsCommon::sdkInterfaces::CapabilityConfigurationInterface
         , public avsCommon::sdkInterfaces::DialogUXStateObserverInterface
         , public avsCommon::sdkInterfaces::MessageRequestObserverInterface
         , public avsCommon::utils::RequiresShutdown
@@ -78,7 +82,7 @@ public:
      * @param focusManager The channel focus manager used to manage usage of the dialog channel.
      * @param dialogUXStateAggregator The dialog state aggregator which tracks UX states related to dialog.
      * @param exceptionEncounteredSender The object to use for sending AVS Exception messages.
-     * @param userActivityNotifier The object to use for resetting user inactivity.
+     * @param UserInactivityMonitor The object to use for resetting user inactivity.
      * @param defaultAudioProvider A default @c avsCommon::AudioProvider to use for ExpectSpeech if the previous
      *     provider is not readable (@c avsCommon::AudioProvider::alwaysReadable).  This parameter is optional and
      *     defaults to an invalid @c avsCommon::AudioProvider.
@@ -91,7 +95,7 @@ public:
         std::shared_ptr<avsCommon::sdkInterfaces::FocusManagerInterface> focusManager,
         std::shared_ptr<avsCommon::avs::DialogUXStateAggregator> dialogUXStateAggregator,
         std::shared_ptr<avsCommon::sdkInterfaces::ExceptionEncounteredSenderInterface> exceptionEncounteredSender,
-        std::shared_ptr<avsCommon::sdkInterfaces::UserActivityNotifierInterface> userActivityNotifier,
+        std::shared_ptr<avsCommon::sdkInterfaces::UserInactivityMonitorInterface> userInactivityNotifier,
         AudioProvider defaultAudioProvider = AudioProvider::null());
 
     /**
@@ -150,6 +154,7 @@ public:
      *     accepted by AVS for keyword is "ALEXA".  See
      *     https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/reference/context#recognizerstate
      * @param espData The ESP measurements to be sent in the ReportEchoSpatialPerceptionData event.
+     * @param KWDMetadata Wake word engine metadata.
      * @return A future which is @c true if the Recognize Event was started successfully, else @c false.
      */
     std::future<bool> recognize(
@@ -158,7 +163,8 @@ public:
         avsCommon::avs::AudioInputStream::Index begin = INVALID_INDEX,
         avsCommon::avs::AudioInputStream::Index keywordEnd = INVALID_INDEX,
         std::string keyword = "",
-        const ESPData& espData = ESPData::EMPTY_ESP_DATA);
+        const ESPData espData = ESPData::getEmptyESPData(),
+        std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr);
 
     /**
      * This function asks the @c AudioInputProcessor to stop streaming audio and end an ongoing Recognize Event, which
@@ -217,6 +223,11 @@ public:
         avsCommon::sdkInterfaces::DialogUXStateObserverInterface::DialogUXState newState) override;
     /// @}
 
+    /// @name CapabilityConfigurationInterface Functions
+    /// @{
+    std::unordered_set<std::shared_ptr<avsCommon::avs::CapabilityConfiguration>> getCapabilityConfigurations() override;
+    /// @}
+
 private:
     /**
      * Constructor.
@@ -226,7 +237,7 @@ private:
      * @param contextManager The AVS Context manager used to generate system context for events.
      * @param focusManager The channel focus manager used to manage usage of the dialog channel.
      * @param exceptionEncounteredSender The object to use for sending ExceptionEncountered messages.
-     * @param userActivityNotifier The object to use for resetting user inactivity.
+     * @param userInactivityMonitor The object to use for resetting user inactivity.
      * @param defaultAudioProvider A default @c avsCommon::AudioProvider to use for ExpectSpeech if the previous
      *     provider is not readable (@c AudioProvider::alwaysReadable).  This parameter is optional, and ignored if set
      *     to @c AudioProvider::null().
@@ -241,7 +252,7 @@ private:
         std::shared_ptr<avsCommon::sdkInterfaces::ContextManagerInterface> contextManager,
         std::shared_ptr<avsCommon::sdkInterfaces::FocusManagerInterface> focusManager,
         std::shared_ptr<avsCommon::sdkInterfaces::ExceptionEncounteredSenderInterface> exceptionEncounteredSender,
-        std::shared_ptr<avsCommon::sdkInterfaces::UserActivityNotifierInterface> userActivityNotifier,
+        std::shared_ptr<avsCommon::sdkInterfaces::UserInactivityMonitorInterface> userInactivityMonitor,
         AudioProvider defaultAudioProvider);
 
     /// @name RequiresShutdown Functions
@@ -286,7 +297,7 @@ private:
      * available so that the @c ReportEchoSpatialPerceptionData event will be sent just before the @c Recognize event.
      * @param espData The ESP measurements to be sent in the ReportEchoSpatialPerceptionData event.
      */
-    void executePrepareEspPayload(const ESPData& espData);
+    void executePrepareEspPayload(const ESPData espData);
 
     /**
      * This function builds @c a Recognize event and will request context so the events will be sent upon @c
@@ -309,6 +320,7 @@ private:
      *     empty string.  This parameter is ignored if initiator is not @c WAKEWORD.  The only value currently
      *     accepted by AVS for keyword is "ALEXA".  See
      *     https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/reference/context#recognizerstate
+     * @param KWDMetadata Wake word engine metadata.
      * @return @c true if the Recognize Event was started successfully, else @c false.
      */
     bool executeRecognize(
@@ -316,7 +328,8 @@ private:
         Initiator initiator,
         avsCommon::avs::AudioInputStream::Index begin = INVALID_INDEX,
         avsCommon::avs::AudioInputStream::Index keywordEnd = INVALID_INDEX,
-        const std::string& keyword = "");
+        const std::string& keyword = "",
+        std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr);
 
     /**
      * This function builds and sends a @c Recognize event.  This version of the function expects a pre-built string
@@ -337,13 +350,15 @@ private:
      *     empty string.  This parameter is ignored if initiator is not @c WAKEWORD.  The only value currently
      *     accepted by AVS for keyword is "ALEXA".  See
      *     https://developer.amazon.com/public/solutions/alexa/alexa-voice-service/reference/context#recognizerstate
+     * @param KWDMetadata Wake word engine metadata.
      * @return @c true if the Recognize Event was started successfully, else @c false.
      */
     bool executeRecognize(
         AudioProvider provider,
         const std::string& initiatorJson,
         avsCommon::avs::AudioInputStream::Index begin = INVALID_INDEX,
-        const std::string& keyword = "");
+        const std::string& keyword = "",
+        std::shared_ptr<const std::vector<char>> KWDMetadata = nullptr);
 
     /**
      * This function receives the full system context from @c ContextManager.  Context requests are initiated by
@@ -472,8 +487,8 @@ private:
     /// The @c FocusManager used to manage usage of the dialog channel.
     std::shared_ptr<avsCommon::sdkInterfaces::FocusManagerInterface> m_focusManager;
 
-    /// The @c UserInactivityMonitor used to reset the inactivity timer of the user.
-    std::shared_ptr<avsCommon::sdkInterfaces::UserActivityNotifierInterface> m_userActivityNotifier;
+    /// The @c UserInactivityMonitorInterface used to reset the inactivity timer of the user.
+    std::shared_ptr<avsCommon::sdkInterfaces::UserInactivityMonitorInterface> m_userInactivityMonitor;
 
     /// Timer which runs in the @c EXPECTING_SPEECH state.
     avsCommon::utils::timing::Timer m_expectingSpeechTimer;
@@ -507,6 +522,13 @@ private:
      * stream from @c executeStopCapture().
      */
     std::shared_ptr<avsCommon::avs::attachment::InProcessAttachmentReader> m_reader;
+
+    /**
+     * The attachment reader used for the wake word engine metadata. It's is populated by a call to @c
+     * executeRecognize(), and later consumed by a call to @c executeOnContextAvailable() when the context arrives and
+     * the full @c MessageRequest can be assembled.  This reader is only relevant during the @c RECOGNIZING state.
+     */
+    std::shared_ptr<avsCommon::avs::attachment::AttachmentReader> m_KWDMetadataReader;
 
     /**
      * The payload for a ReportEchoSpatialPerceptionData event.  This string is populated by a call to @c
@@ -580,6 +602,9 @@ private:
      */
     std::unique_ptr<std::string> m_precedingExpectSpeechInitiator;
     /// @}
+
+    /// Set of capability configurations that will get published using the Capabilities API
+    std::unordered_set<std::shared_ptr<avsCommon::avs::CapabilityConfiguration>> m_capabilityConfigurations;
 
     /**
      * @c Executor which queues up operations from asynchronous API calls.

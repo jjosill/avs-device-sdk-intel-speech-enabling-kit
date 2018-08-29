@@ -21,6 +21,7 @@
 #include <rapidjson/error/en.h>
 
 #include <AVSCommon/AVS/ExternalMediaPlayer/AdapterUtils.h>
+#include <AVSCommon/AVS/ExternalMediaPlayer/ExternalMediaAdapterConstants.h>
 #include <AVSCommon/AVS/SpeakerConstants/SpeakerConstants.h>
 #include <AVSCommon/Utils/JSON/JSONUtils.h>
 #include <AVSCommon/Utils/Memory/Memory.h>
@@ -79,6 +80,7 @@ static const NamespaceAndName REWIND_DIRECTIVE{PLAYBACKCONTROLLER_NAMESPACE, "Re
 static const NamespaceAndName FASTFORWARD_DIRECTIVE{PLAYBACKCONTROLLER_NAMESPACE, "FastForward"};
 
 // The @c PlayList control directive signature.
+static const NamespaceAndName ENABLEREPEATONE_DIRECTIVE{PLAYLISTCONTROLLER_NAMESPACE, "EnableRepeatOne"};
 static const NamespaceAndName ENABLEREPEAT_DIRECTIVE{PLAYLISTCONTROLLER_NAMESPACE, "EnableRepeat"};
 static const NamespaceAndName DISABLEREPEAT_DIRECTIVE{PLAYLISTCONTROLLER_NAMESPACE, "DisableRepeat"};
 static const NamespaceAndName ENABLESHUFFLE_DIRECTIVE{PLAYLISTCONTROLLER_NAMESPACE, "EnableShuffle"};
@@ -121,6 +123,8 @@ std::unordered_map<NamespaceAndName, std::pair<RequestType, ExternalMediaPlayer:
         {STARTOVER_DIRECTIVE, std::make_pair(RequestType::START_OVER, &ExternalMediaPlayer::handlePlayControl)},
         {FASTFORWARD_DIRECTIVE, std::make_pair(RequestType::FAST_FORWARD, &ExternalMediaPlayer::handlePlayControl)},
         {REWIND_DIRECTIVE, std::make_pair(RequestType::REWIND, &ExternalMediaPlayer::handlePlayControl)},
+        {ENABLEREPEATONE_DIRECTIVE,
+         std::make_pair(RequestType::ENABLE_REPEAT_ONE, &ExternalMediaPlayer::handlePlayControl)},
         {ENABLEREPEAT_DIRECTIVE, std::make_pair(RequestType::ENABLE_REPEAT, &ExternalMediaPlayer::handlePlayControl)},
         {DISABLEREPEAT_DIRECTIVE, std::make_pair(RequestType::DISABLE_REPEAT, &ExternalMediaPlayer::handlePlayControl)},
         {ENABLESHUFFLE_DIRECTIVE, std::make_pair(RequestType::ENABLE_SHUFFLE, &ExternalMediaPlayer::handlePlayControl)},
@@ -141,6 +145,7 @@ static DirectiveHandlerConfiguration g_configuration = {{PLAY_DIRECTIVE, Blockin
                                                         {STARTOVER_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
                                                         {REWIND_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
                                                         {FASTFORWARD_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
+                                                        {ENABLEREPEATONE_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
                                                         {ENABLEREPEAT_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
                                                         {DISABLEREPEAT_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
                                                         {ENABLESHUFFLE_DIRECTIVE, BlockingPolicy::NON_BLOCKING},
@@ -158,6 +163,7 @@ static std::unordered_map<avsCommon::avs::PlaybackButton, RequestType> g_buttonT
 
 std::shared_ptr<ExternalMediaPlayer> ExternalMediaPlayer::create(
     const AdapterMediaPlayerMap& mediaPlayers,
+    const AdapterSpeakerMap& speakers,
     const AdapterCreationMap& adapterCreationMap,
     std::shared_ptr<SpeakerManagerInterface> speakerManager,
     std::shared_ptr<MessageSenderInterface> messageSender,
@@ -165,6 +171,11 @@ std::shared_ptr<ExternalMediaPlayer> ExternalMediaPlayer::create(
     std::shared_ptr<ContextManagerInterface> contextManager,
     std::shared_ptr<ExceptionEncounteredSenderInterface> exceptionSender,
     std::shared_ptr<PlaybackRouterInterface> playbackRouter) {
+    if (nullptr == speakerManager) {
+        ACSDK_ERROR(LX("createFailed").d("reason", "nullSpeakerManager"));
+        return nullptr;
+    }
+
     if (nullptr == messageSender) {
         ACSDK_ERROR(LX("createFailed").d("reason", "nullMessageSender"));
         return nullptr;
@@ -192,7 +203,8 @@ std::shared_ptr<ExternalMediaPlayer> ExternalMediaPlayer::create(
     contextManager->setStateProvider(SESSION_STATE, externalMediaPlayer);
     contextManager->setStateProvider(PLAYBACK_STATE, externalMediaPlayer);
 
-    externalMediaPlayer->createAdapters(mediaPlayers, adapterCreationMap, messageSender, focusManager, contextManager);
+    externalMediaPlayer->createAdapters(
+        mediaPlayers, speakers, adapterCreationMap, messageSender, focusManager, contextManager);
 
     return externalMediaPlayer;
 }
@@ -207,8 +219,6 @@ ExternalMediaPlayer::ExternalMediaPlayer(
         m_speakerManager{speakerManager},
         m_contextManager{contextManager},
         m_playbackRouter{playbackRouter} {
-    m_speakerSettings.volume = avsCommon::avs::speakerConstants::AVS_SET_VOLUME_MAX;
-    m_speakerSettings.mute = false;
 }
 
 void ExternalMediaPlayer::provideState(
@@ -257,6 +267,8 @@ void ExternalMediaPlayer::handleDirective(std::shared_ptr<DirectiveInfo> info) {
                         .d("reason", "noDirectiveHandlerForDirective")
                         .d("nameSpace", info->directive->getNamespace())
                         .d("name", info->directive->getName()));
+        sendExceptionEncounteredAndReportFailed(
+            info, "Unhandled directive", ExceptionErrorType::UNEXPECTED_INFORMATION_RECEIVED);
         return;
     }
 
@@ -272,12 +284,11 @@ std::shared_ptr<ExternalMediaAdapterInterface> ExternalMediaPlayer::preprocessDi
     ACSDK_DEBUG9(LX("preprocessDirective"));
 
     if (!parseDirectivePayload(info, document)) {
-        sendExceptionEncounteredAndReportFailed(info, "Failed to parse directive.");
         return nullptr;
     }
 
     std::string playerId;
-    if (!jsonUtils::retrieveValue(*document, "playerId", &playerId)) {
+    if (!jsonUtils::retrieveValue(*document, PLAYER_ID, &playerId)) {
         ACSDK_ERROR(LX("preprocessDirectiveFailed").d("reason", "nullPlayerId"));
         sendExceptionEncounteredAndReportFailed(info, "No PlayerId in directive.");
         return nullptr;
@@ -285,14 +296,14 @@ std::shared_ptr<ExternalMediaAdapterInterface> ExternalMediaPlayer::preprocessDi
 
     auto adapterIt = m_adapters.find(playerId);
     if (adapterIt == m_adapters.end()) {
-        ACSDK_ERROR(LX("preprocessDirectiveFailed").d("reason", "noAdapterForPlayerId").d("playerId", playerId));
+        ACSDK_ERROR(LX("preprocessDirectiveFailed").d("reason", "noAdapterForPlayerId").d(PLAYER_ID, playerId));
         sendExceptionEncounteredAndReportFailed(info, "Unrecogonized PlayerId.");
         return nullptr;
     }
 
     auto adapter = adapterIt->second;
     if (!adapter) {
-        ACSDK_ERROR(LX("preprocessDirectiveFailed").d("reason", "nullAdapter").d("playerId", playerId));
+        ACSDK_ERROR(LX("preprocessDirectiveFailed").d("reason", "nullAdapter").d(PLAYER_ID, playerId));
         sendExceptionEncounteredAndReportFailed(info, "nullAdapter.");
         return nullptr;
     }
@@ -316,7 +327,7 @@ void ExternalMediaPlayer::handleLogin(std::shared_ptr<DirectiveInfo> info, Reque
     }
 
     std::string userName;
-    if (!jsonUtils::retrieveValue(payload, "username", &userName)) {
+    if (!jsonUtils::retrieveValue(payload, USERNAME, &userName)) {
         userName = "";
     }
 
@@ -388,7 +399,7 @@ void ExternalMediaPlayer::handleSeek(std::shared_ptr<DirectiveInfo> info, Reques
     }
 
     int64_t position;
-    if (!jsonUtils::retrieveValue(payload, "positionMilliseconds", &position)) {
+    if (!jsonUtils::retrieveValue(payload, POSITIONINMS, &position)) {
         ACSDK_ERROR(LX("handleDirectiveFailed").d("reason", "nullPosition"));
         sendExceptionEncounteredAndReportFailed(info, "missing positionMilliseconds in SetSeekPosition directive");
         return;
@@ -615,78 +626,9 @@ std::string ExternalMediaPlayer::providePlaybackState() {
     return buffer.GetString();
 }
 
-/*
- * SpeakerInterface.
- */
-bool ExternalMediaPlayer::setVolume(int8_t volume) {
-    if (volume > avsCommon::avs::speakerConstants::AVS_SET_VOLUME_MAX ||
-        volume < avsCommon::avs::speakerConstants::AVS_SET_VOLUME_MIN) {
-        ACSDK_ERROR(LX("setVolumeFailed").d("reason", "invalid volume value").d("value", volume));
-        return false;
-    }
-
-    m_speakerSettings.volume = volume;
-
-    for (auto& adapter : m_adapters) {
-        if (!adapter.second) {
-            continue;
-        }
-        adapter.second->handleSetVolume(volume);
-    }
-    return true;
-}
-
-bool ExternalMediaPlayer::adjustVolume(int8_t volume) {
-    if (volume > avsCommon::avs::speakerConstants::AVS_ADJUST_VOLUME_MAX ||
-        volume < avsCommon::avs::speakerConstants::AVS_ADJUST_VOLUME_MIN) {
-        ACSDK_ERROR(LX("adjustVolumeFailed").d("reason", "invalid volume value").d("value", volume));
-        return false;
-    }
-
-    // TODO: Replace int variables here to the actual volume time when int8_t would be changed to it
-    int newVolume = m_speakerSettings.volume + volume;
-    newVolume = std::min(newVolume, (int)speakerConstants::AVS_SET_VOLUME_MAX);
-    newVolume = std::max(newVolume, (int)speakerConstants::AVS_SET_VOLUME_MIN);
-
-    m_speakerSettings.volume = newVolume;
-
-    for (auto& adapter : m_adapters) {
-        if (!adapter.second) {
-            continue;
-        }
-        adapter.second->handleSetVolume((int8_t)newVolume);
-    }
-    return true;
-}
-
-bool ExternalMediaPlayer::setMute(bool mute) {
-    m_speakerSettings.mute = mute;
-
-    for (auto& adapter : m_adapters) {
-        if (!adapter.second) {
-            continue;
-        }
-        adapter.second->handleSetMute(mute);
-    }
-    return true;
-}
-
-bool ExternalMediaPlayer::getSpeakerSettings(avsCommon::sdkInterfaces::SpeakerInterface::SpeakerSettings* settings) {
-    if (!settings) {
-        ACSDK_ERROR(LX("getSpeakerSettingsFailed").d("reason", "nullSettings"));
-        return false;
-    }
-    settings->mute = m_speakerSettings.mute;
-    settings->volume = m_speakerSettings.volume;
-    return true;
-}
-
-avsCommon::sdkInterfaces::SpeakerInterface::Type ExternalMediaPlayer::getSpeakerType() {
-    return SpeakerInterface::Type::AVS_SYNCED;
-}
-
 void ExternalMediaPlayer::createAdapters(
     const AdapterMediaPlayerMap& mediaPlayers,
+    const AdapterSpeakerMap& speakers,
     const AdapterCreationMap& adapterCreationMap,
     std::shared_ptr<MessageSenderInterface> messageSender,
     std::shared_ptr<FocusManagerInterface> focusManager,
@@ -694,18 +636,30 @@ void ExternalMediaPlayer::createAdapters(
     ACSDK_DEBUG0(LX("createAdapters"));
     for (auto& entry : adapterCreationMap) {
         auto mediaPlayerIt = mediaPlayers.find(entry.first);
+        auto speakerIt = speakers.find(entry.first);
 
         if (mediaPlayerIt == mediaPlayers.end()) {
-            ACSDK_ERROR(LX("adapterCreationFailed").d("playerId", entry.first).d("reason", "nullMediaPlayer"));
+            ACSDK_ERROR(LX("adapterCreationFailed").d(PLAYER_ID, entry.first).d("reason", "nullMediaPlayer"));
+            continue;
+        }
+
+        if (speakerIt == speakers.end()) {
+            ACSDK_ERROR(LX("adapterCreationFailed").d("playerId", entry.first).d("reason", "nullSpeaker"));
             continue;
         }
 
         auto adapter = entry.second(
-            (*mediaPlayerIt).second, m_speakerManager, messageSender, focusManager, contextManager, shared_from_this());
+            (*mediaPlayerIt).second,
+            (*speakerIt).second,
+            m_speakerManager,
+            messageSender,
+            focusManager,
+            contextManager,
+            shared_from_this());
         if (adapter) {
             m_adapters[entry.first] = adapter;
         } else {
-            ACSDK_ERROR(LX("adapterCreationFailed").d("playerId", entry.first));
+            ACSDK_ERROR(LX("adapterCreationFailed").d(PLAYER_ID, entry.first));
         }
     }
 }

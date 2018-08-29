@@ -13,9 +13,8 @@
  * permissions and limitations under the License.
  */
 
+#include <chrono>
 #include <cstdlib>
-
-#include <sys/time.h>
 
 #include <gtest/gtest.h>
 
@@ -40,10 +39,11 @@ static const std::string BAD_PATH =
  * @return A unique filepath.
  */
 static std::string generateDbFilePath() {
-    struct timeval t;
-    gettimeofday(&t, nullptr);
-    std::string filePath = g_workingDirectory + "/SQLiteDatabaseTest-" + std::to_string(t.tv_sec) +
-                           std::to_string(t.tv_usec) + std::to_string(rand());
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    auto nanosecond = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(currentTime.time_since_epoch()).count());
+    std::string filePath =
+        g_workingDirectory + "/SQLiteDatabaseTest-" + std::to_string(nanosecond) + std::to_string(rand());
     EXPECT_FALSE(avsCommon::utils::file::fileExists(filePath));
     return filePath;
 }
@@ -128,6 +128,90 @@ TEST(SQLiteDatabaseTest, OpenTwice) {
 
     db2.close();
     db1.close();
+}
+
+/// Test transactions commit
+TEST(SQLiteDatabaseTest, TransactionsCommit) {
+    auto dbFilePath = generateDbFilePath();
+    SQLiteDatabase db(dbFilePath);
+    ASSERT_TRUE(db.initialize());
+
+    {
+        auto transaction1 = db.beginTransaction();
+        ASSERT_NE(transaction1, nullptr);
+        ASSERT_TRUE(transaction1->commit());
+    }
+
+    // Should not fail because previous transaction is completed
+    auto transaction2 = db.beginTransaction();
+    ASSERT_NE(transaction2, nullptr);
+
+    db.close();
+}
+
+// Test transactions rollback
+TEST(SQLiteDatabaseTest, TransactionsRollback) {
+    auto dbFilePath = generateDbFilePath();
+    SQLiteDatabase db(dbFilePath);
+    ASSERT_TRUE(db.initialize());
+
+    {
+        auto transaction1 = db.beginTransaction();
+        ASSERT_NE(transaction1, nullptr);
+        ASSERT_TRUE(transaction1->rollback());
+    }
+
+    // Should not fail because previous transaction is completed
+    auto transaction2 = db.beginTransaction();
+    ASSERT_NE(transaction2, nullptr);
+
+    db.close();
+}
+
+/// Test nested transactions
+TEST(SQLiteDatabaseTest, NestedTransactions) {
+    auto dbFilePath = generateDbFilePath();
+    SQLiteDatabase db(dbFilePath);
+    ASSERT_TRUE(db.initialize());
+
+    auto transaction1 = db.beginTransaction();
+    ASSERT_NE(transaction1, nullptr);
+    auto transaction2 = db.beginTransaction();
+    ASSERT_EQ(transaction2, nullptr);
+
+    db.close();
+}
+
+/// Test transactions double commit
+TEST(SQLiteDatabaseTest, DoubleCommit) {
+    auto dbFilePath = generateDbFilePath();
+    SQLiteDatabase db(dbFilePath);
+    ASSERT_TRUE(db.initialize());
+
+    auto transaction1 = db.beginTransaction();
+    ASSERT_NE(transaction1, nullptr);
+    ASSERT_TRUE(transaction1->commit());
+    ASSERT_FALSE(transaction1->commit());
+
+    db.close();
+}
+
+/// Test automatic rollback
+TEST(SQLiteDatabaseTest, AutoRollback) {
+    auto dbFilePath = generateDbFilePath();
+    SQLiteDatabase db(dbFilePath);
+    ASSERT_TRUE(db.initialize());
+
+    {
+        auto transaction1 = db.beginTransaction();
+        ASSERT_NE(transaction1, nullptr);
+    }
+
+    // Should not fail because transaction should have been automatically completed
+    auto transaction2 = db.beginTransaction();
+    ASSERT_NE(transaction2, nullptr);
+
+    db.close();
 }
 
 }  // namespace test

@@ -24,6 +24,7 @@
 #include <AVSCommon/AVS/Attachment/MockAttachmentManager.h>
 #include <AVSCommon/SDKInterfaces/MockMessageSender.h>
 #include <AVSCommon/SDKInterfaces/MockExceptionEncounteredSender.h>
+#include <AVSCommon/SDKInterfaces/MockUserInactivityMonitorObserver.h>
 #include <AVSCommon/Utils/JSON/JSONUtils.h>
 #include <ADSL/DirectiveSequencer.h>
 
@@ -126,7 +127,7 @@ TEST_F(UserInactivityMonitorTest, createSuccessfully) {
         m_mockMessageSender, m_mockExceptionEncounteredSender, USER_INACTIVITY_REPORT_PERIOD);
     ASSERT_NE(nullptr, userInactivityMonitor);
 
-    exitTrigger.wait_for(exitLock, USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD / 2);
+    exitTrigger.wait_for(exitLock, USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD);
 }
 
 /**
@@ -150,6 +151,14 @@ TEST_F(UserInactivityMonitorTest, handleDirectiveProperly) {
         m_mockMessageSender, m_mockExceptionEncounteredSender, USER_INACTIVITY_REPORT_PERIOD);
     ASSERT_NE(nullptr, userInactivityMonitor);
 
+    // let's verify that observers are notified when the UserInactivityReport Event is sent.
+    auto userInactivityObserver1 = std::make_shared<MockUserInactivityMonitorObserver>();
+    auto userInactivityObserver2 = std::make_shared<MockUserInactivityMonitorObserver>();
+    EXPECT_CALL(*(userInactivityObserver1.get()), onUserInactivityReportSent());
+    EXPECT_CALL(*(userInactivityObserver2.get()), onUserInactivityReportSent());
+    userInactivityMonitor->addObserver(userInactivityObserver1);
+    userInactivityMonitor->addObserver(userInactivityObserver2);
+
     auto directiveSequencer = adsl::DirectiveSequencer::create(m_mockExceptionEncounteredSender);
     directiveSequencer->addDirectiveHandler(userInactivityMonitor);
 
@@ -160,7 +169,8 @@ TEST_F(UserInactivityMonitorTest, handleDirectiveProperly) {
         AVSDirective::create("", userInactivityDirectiveHeader, "", attachmentManager, "");
 
     directiveSequencer->onDirective(userInactivityDirective);
-    exitTrigger.wait_for(exitLock, USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD / 2);
+    exitTrigger.wait_for(exitLock, USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD);
+
     directiveSequencer->shutdown();
 }
 
@@ -178,7 +188,25 @@ TEST_F(UserInactivityMonitorTest, sendMultipleReports) {
         m_mockMessageSender, m_mockExceptionEncounteredSender, USER_INACTIVITY_REPORT_PERIOD);
     ASSERT_NE(nullptr, userInactivityMonitor);
 
-    exitTrigger.wait_for(exitLock, repetitionCount * USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD / 2);
+    exitTrigger.wait_for(exitLock, repetitionCount * USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD);
+}
+
+/**
+ * Verify that timeSinceUserInactivity works as expected.
+ */
+TEST_F(UserInactivityMonitorTest, verifyInactivityTime) {
+    auto userInactivityMonitor = UserInactivityMonitor::create(m_mockMessageSender, m_mockExceptionEncounteredSender);
+    ASSERT_NE(nullptr, userInactivityMonitor);
+
+    // we should strongly expect that zero seconds have passed!
+    auto timeInactive = userInactivityMonitor->timeSinceUserActivity();
+    ASSERT_EQ(0, timeInactive.count());
+
+    // now test for a small millisecond delta.
+    std::this_thread::sleep_for(USER_INACTIVITY_REPORT_PERIOD);
+    timeInactive = userInactivityMonitor->timeSinceUserActivity();
+    auto msPassed = std::chrono::duration_cast<std::chrono::milliseconds>(timeInactive);
+    ASSERT_GE(msPassed.count(), 0);
 }
 
 /**
@@ -209,7 +237,7 @@ TEST_F(UserInactivityMonitorTest, sendMultipleReportsWithReset) {
     std::this_thread::sleep_for(2 * USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD / 2);
     directiveSequencer->onDirective(userInactivityDirective);
 
-    exitTrigger.wait_for(exitLock, repetitionCount * USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD / 2);
+    exitTrigger.wait_for(exitLock, repetitionCount * USER_INACTIVITY_REPORT_PERIOD + USER_INACTIVITY_REPORT_PERIOD);
     directiveSequencer->shutdown();
 }
 
