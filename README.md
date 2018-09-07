@@ -1,1 +1,1 @@
-AVS 1.8.1 without wakeword 
+avs-device-sdk-intel-speech-enabling-kit 
